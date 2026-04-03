@@ -1,0 +1,1223 @@
+(function () {
+    'use strict';
+
+    if (window.kinogo_source_plugin_ready) return;
+    window.kinogo_source_plugin_ready = true;
+
+    var SOURCE_KEY = 'kinogo';
+    var SOURCE_TITLE = 'KinoGO';
+    var BASE_URL = 'https://kinogo.li';
+    var CACHE_MINUTES = 45;
+    var REQUEST_TIMEOUT = 25000;
+
+    var network = new Lampa.Reguest();
+    network.timeout(REQUEST_TIMEOUT);
+
+    var memoryCache = {};
+    var cardUrlById = {};
+    var seasonsByUrl = {};
+    var lastNotyAt = 0;
+    var menuCache = {
+        expires: 0,
+        items: []
+    };
+
+    function log() {
+        var args = ['[KinoGO]'];
+
+        for (var i = 0; i < arguments.length; i++) args.push(arguments[i]);
+        console.log.apply(console, args);
+    }
+
+    function now() {
+        return Date.now();
+    }
+
+    function notifyError(message) {
+        if (!Lampa.Noty) return;
+        if (now() - lastNotyAt < 5000) return;
+        lastNotyAt = now();
+        Lampa.Noty.show(message);
+    }
+
+    function toInt(value, fallback) {
+        var num = parseInt(value, 10);
+        return isNaN(num) ? (fallback || 0) : num;
+    }
+
+    function toFloat(value, fallback) {
+        var num = parseFloat(value);
+        return isNaN(num) ? (fallback || 0) : num;
+    }
+
+    function unique(arr) {
+        var out = [];
+        var map = {};
+
+        for (var i = 0; i < arr.length; i++) {
+            var key = arr[i];
+            if (!key || map[key]) continue;
+            map[key] = true;
+            out.push(key);
+        }
+
+        return out;
+    }
+
+    function text(value) {
+        return (value || '').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+    }
+
+    function stripTags(value) {
+        if (!value) return '';
+        return text((value + '').replace(/<[^>]+>/g, ' '));
+    }
+
+    function htmlToDoc(html) {
+        return new DOMParser().parseFromString(html || '', 'text/html');
+    }
+
+    function absUrl(url) {
+        if (!url) return '';
+
+        var value = text(url);
+
+        if (!value) return '';
+        if (value.indexOf('//') === 0) return 'https:' + value;
+        if (/^https?:\/\//i.test(value)) return value;
+        if (value.charAt(0) !== '/') value = '/' + value;
+
+        return BASE_URL + value;
+    }
+
+    function normalizeQuery(query) {
+        var value = text(query);
+
+        if (!value) return '';
+
+        try {
+            return text(decodeURIComponent(value));
+        } catch (e) {
+            return value;
+        }
+    }
+
+    function encodeCP1251URIComponent(str) {
+        var out = '';
+
+        for (var i = 0; i < str.length; i++) {
+            var ch = str.charAt(i);
+            var code = ch.charCodeAt(0);
+            var byte = -1;
+
+            if (code < 128) {
+                out += encodeURIComponent(ch);
+                continue;
+            }
+
+            if (code === 1025) byte = 168;      // Ё
+            else if (code === 1105) byte = 184; // ё
+            else if (code >= 1040 && code <= 1103) byte = code - 848;
+
+            if (byte >= 0) {
+                var hex = byte.toString(16).toUpperCase();
+                if (hex.length < 2) hex = '0' + hex;
+                out += '%' + hex;
+            } else {
+                out += encodeURIComponent(ch);
+            }
+        }
+
+        return out;
+    }
+
+    function cacheGet(key) {
+        var entry = memoryCache[key];
+        if (!entry) return null;
+        if (entry.expires < now()) {
+            delete memoryCache[key];
+            return null;
+        }
+        return entry.value;
+    }
+
+    function cacheSet(key, value, ttlMinutes) {
+        memoryCache[key] = {
+            value: value,
+            expires: now() + (ttlMinutes * 60 * 1000)
+        };
+    }
+
+    function proxiedUrl(url) {
+        var target = absUrl(url);
+        var proxy = text(Lampa.Storage.get('kinogo_proxy', ''));
+
+        if (!proxy) return target;
+        if (!/^https?:\/\//i.test(proxy)) return target;
+
+        if (proxy.indexOf('{url}') >= 0) return proxy.replace('{url}', encodeURIComponent(target));
+
+        if (proxy.indexOf('?') >= 0) return proxy + encodeURIComponent(target);
+
+        if (proxy.charAt(proxy.length - 1) !== '/') proxy += '/';
+        return proxy + target;
+    }
+
+    function requestText(url, onSuccess, onError, postData, ttlMinutes) {
+        var target = proxiedUrl(url);
+        var cacheKey = 'TEXT::' + target + '::' + JSON.stringify(postData || {});
+        var cached = cacheGet(cacheKey);
+
+        if (cached !== null) {
+            onSuccess(cached);
+            return;
+        }
+
+        network.silent(target, function (data) {
+            var html = typeof data === 'string' ? data : (data || '') + '';
+            cacheSet(cacheKey, html, ttlMinutes || CACHE_MINUTES);
+            onSuccess(html);
+        }, function (a, b) {
+            var decoded = '';
+
+            try {
+                decoded = network.errorDecode(a, b);
+            } catch (e) {
+                decoded = '';
+            }
+
+            notifyError(decoded ? ('KinoGO: ' + decoded) : 'KinoGO: ошибка сети');
+            if (onError) onError(a, b);
+        }, postData || false, {
+            dataType: 'text',
+            cache: {
+                life: ttlMinutes || CACHE_MINUTES
+            }
+        });
+    }
+
+    function readNodeValueAfterLabel(labelNode) {
+        var value = '';
+        var node = labelNode ? labelNode.nextSibling : null;
+
+        while (node) {
+            if (node.nodeType === 1 && node.tagName === 'BR') break;
+            value += node.textContent || '';
+            node = node.nextSibling;
+        }
+
+        return text(value);
+    }
+
+    function parseFacts(root) {
+        var facts = {};
+        if (!root) return facts;
+
+        var labels = root.querySelectorAll('b');
+
+        for (var i = 0; i < labels.length; i++) {
+            var label = text(labels[i].textContent).replace(/\s*:\s*$/, '').toLowerCase();
+            var value = readNodeValueAfterLabel(labels[i]);
+            if (label && value) facts[label] = value;
+        }
+
+        return facts;
+    }
+
+    function pickFact(facts, needles) {
+        for (var key in facts) {
+            if (!Object.prototype.hasOwnProperty.call(facts, key)) continue;
+
+            for (var i = 0; i < needles.length; i++) {
+                if (key.indexOf(needles[i]) >= 0) return facts[key];
+            }
+        }
+        return '';
+    }
+
+    function splitCSV(value) {
+        if (!value) return [];
+        return value.split(',').map(function (part) {
+            return text(part);
+        }).filter(function (part) {
+            return !!part;
+        });
+    }
+
+    function parseRatings(rawText) {
+        var raw = rawText || '';
+        var kp = 0;
+        var imdb = 0;
+        var kpMatch = raw.match(/KP\s*([0-9]+(?:[.,][0-9]+)?)/i);
+        var imdbMatch = raw.match(/IMDB\s*([0-9]+(?:[.,][0-9]+)?)/i);
+
+        if (kpMatch && kpMatch[1]) kp = toFloat(kpMatch[1].replace(',', '.'), 0);
+        if (imdbMatch && imdbMatch[1]) imdb = toFloat(imdbMatch[1].replace(',', '.'), 0);
+
+        return {
+            kp: kp,
+            imdb: imdb
+        };
+    }
+
+    function isTvCard(title, genres, url) {
+        var t = (title || '').toLowerCase();
+        var g = (genres || []).join(' ').toLowerCase();
+        var u = (url || '').toLowerCase();
+
+        if (/(сезон|серия|все серии|serial|serials)/i.test(t)) return true;
+        if (/(сериалы|дорамы|тв передачи|турецкие сериалы)/i.test(g)) return true;
+        if (u.indexOf('/new-serial') >= 0 || u.indexOf('-serial') >= 0) return true;
+
+        return false;
+    }
+
+    function extractIdFromUrl(url) {
+        var match = (url || '').match(/\/(\d+)-/);
+        return match ? toInt(match[1], 0) : 0;
+    }
+
+    function parseCardFromShortstory(node) {
+        var anchor = node.querySelector('.zagolovki a');
+        if (!anchor) return null;
+
+        var url = absUrl(anchor.getAttribute('href') || '');
+        var id = extractIdFromUrl(url);
+        var title = stripTags(anchor.textContent);
+        var posterNode = node.querySelector('img[data-src], img[src]');
+        var poster = absUrl((posterNode && (posterNode.getAttribute('data-src') || posterNode.getAttribute('src'))) || '');
+        var facts = parseFacts(node.querySelector('.shortimg'));
+        var year = toInt(pickFact(facts, ['год']), 0);
+        var genres = splitCSV(pickFact(facts, ['жанр']));
+        var rating = toFloat(text((node.querySelector('[itemprop="ratingValue"]') || {}).textContent || '').replace(',', '.'), 0);
+        var parsedRatings = parseRatings(node.textContent || '');
+        var infoNode = node.querySelector('.shortimg');
+        var desc = '';
+
+        if (infoNode) {
+            var clone = infoNode.cloneNode(true);
+            var garbage = clone.querySelectorAll('b, img, .lenta, .edge-left, script, style');
+            for (var i = 0; i < garbage.length; i++) garbage[i].remove();
+            desc = text(clone.textContent || '').slice(0, 550);
+        }
+
+        var tv = isTvCard(title, genres, url);
+        var genreObjects = genres.map(function (name, index) {
+            return {
+                id: index + 1,
+                name: name
+            };
+        });
+        var card = {
+            id: id || Lampa.Utils.hash(url),
+            source: SOURCE_KEY,
+            url: url,
+            kinogo_id: id || 0,
+            title: title,
+            original_title: title,
+            overview: desc,
+            description: desc,
+            vote_average: rating || 0,
+            kp_rating: parsedRatings.kp || 0,
+            imdb_rating: parsedRatings.imdb || 0,
+            genres: genreObjects,
+            genre_ids: genreObjects.map(function (g) { return g.id; }),
+            img: poster || './img/img_broken.svg',
+            poster: poster || './img/img_broken.svg',
+            background_image: poster || './img/img_broken.svg',
+            type: tv ? 'tv' : 'movie'
+        };
+
+        if (year > 0) {
+            card.year = year;
+            if (tv) card.first_air_date = year + '-01-01';
+            else card.release_date = year + '-01-01';
+        }
+
+        if (tv) {
+            card.name = title;
+            card.original_name = title;
+        } else {
+            delete card.name;
+            delete card.original_name;
+        }
+
+        cardUrlById[card.id] = url;
+        return card;
+    }
+
+    function parseCardsFromDoc(doc) {
+        var nodes = doc.querySelectorAll('.shortstory');
+        var cards = [];
+
+        for (var i = 0; i < nodes.length; i++) {
+            var card = parseCardFromShortstory(nodes[i]);
+            if (card) cards.push(card);
+        }
+
+        return cards;
+    }
+
+    function parseSerialUpdatesFromDoc(doc) {
+        var rows = doc.querySelectorAll('.msupdate_block_list_link');
+        var cards = [];
+
+        for (var i = 0; i < rows.length; i++) {
+            var link = rows[i];
+            var url = absUrl(link.getAttribute('href') || '');
+            var title = text(link.getAttribute('title') || (link.querySelector('.msupdate_block_list_item_title') || {}).textContent || link.textContent || '');
+            var imgNode = link.querySelector('img');
+            var img = absUrl(((imgNode || {}).getAttribute || function () { return ''; }).call(imgNode || {}, 'data-src') || ((imgNode || {}).getAttribute || function () { return ''; }).call(imgNode || {}, 'src'));
+            var yearMatch = title.match(/\((\d{4})\)/);
+            var id = extractIdFromUrl(url);
+
+            if (!url || !title) continue;
+
+            var card = {
+                id: id || Lampa.Utils.hash(url),
+                source: SOURCE_KEY,
+                url: url,
+                kinogo_id: id || 0,
+                name: title,
+                original_name: title,
+                title: title,
+                original_title: title,
+                first_air_date: yearMatch ? (yearMatch[1] + '-01-01') : '',
+                year: yearMatch ? toInt(yearMatch[1], 0) : 0,
+                vote_average: 0,
+                overview: '',
+                description: '',
+                genres: [],
+                genre_ids: [],
+                img: img || './img/img_broken.svg',
+                poster: img || './img/img_broken.svg',
+                background_image: img || './img/img_broken.svg',
+                type: 'tv'
+            };
+
+            cardUrlById[card.id] = url;
+            cards.push(card);
+        }
+
+        return cards;
+    }
+
+    function parsePagination(doc, currentPage) {
+        var page = Math.max(1, toInt(currentPage, 1));
+        var maxPage = page;
+        var nav = doc.querySelector('.bot-navigation');
+        if (!nav) return maxPage;
+
+        var nodes = nav.querySelectorAll('a, span');
+
+        for (var i = 0; i < nodes.length; i++) {
+            var value = toInt(text(nodes[i].textContent), 0);
+            if (value > maxPage) maxPage = value;
+
+            var onclick = nodes[i].getAttribute('onclick') || '';
+            var submitMatch = onclick.match(/list_submit\((\d+)\)/);
+            if (submitMatch) {
+                value = toInt(submitMatch[1], 0);
+                if (value > maxPage) maxPage = value;
+            }
+
+            var href = nodes[i].getAttribute('href') || '';
+            var hrefMatch = href.match(/\/page\/(\d+)/);
+            if (hrefMatch) {
+                value = toInt(hrefMatch[1], 0);
+                if (value > maxPage) maxPage = value;
+            }
+        }
+
+        return maxPage;
+    }
+
+    function buildSearchUrl(query, page) {
+        var encoded = encodeCP1251URIComponent(query || '');
+        var url = BASE_URL + '/xfsearch/' + encoded + '/';
+        var p = Math.max(1, toInt(page, 1));
+
+        if (p > 1) url += 'page/' + p + '/';
+
+        return url;
+    }
+
+    function normalizeSitePath(url) {
+        var normalized = absUrl(url);
+        var match = normalized.match(/\/xfsearch\/([^/?#]+)\//i);
+
+        if (!match || !match[1]) return normalized;
+        if (match[1].indexOf('%') >= 0) return normalized;
+
+        var query = match[1];
+        try {
+            query = decodeURIComponent(query);
+        } catch (e) {}
+
+        return normalized.replace('/xfsearch/' + match[1] + '/', '/xfsearch/' + encodeCP1251URIComponent(query) + '/');
+    }
+
+    function appendPage(url, page) {
+        var p = Math.max(1, toInt(page, 1));
+        var base = normalizeSitePath(url);
+        if (p <= 1) return base;
+
+        if (/\/page\/\d+\/?$/i.test(base)) return base.replace(/\/page\/\d+\/?$/i, '/page/' + p + '/');
+
+        if (base.indexOf('?') >= 0) return base + '&page=' + p;
+        if (base.charAt(base.length - 1) !== '/') base += '/';
+        return base + 'page/' + p + '/';
+    }
+
+    function resolveListPath(params) {
+        var custom = text((params && (params.genres || params.id)) || '');
+        if (custom && custom.indexOf('/') >= 0) return custom;
+        if (/^https?:\/\//i.test(custom)) return custom;
+
+        var url = text((params && params.url) || '');
+        if (/^https?:\/\//i.test(url)) return url;
+        if (url && url.charAt(0) === '/') return url;
+
+        if (url === 'tv') return '/new-serial/';
+        if (url === 'anime') return '/anime/';
+        if (url === 'movie') return '/filmis/';
+        if (url) return '/filmis/';
+
+        return '/';
+    }
+
+    function fetchCardsPage(params, onSuccess, onError) {
+        var page = Math.max(1, toInt(params.page, 1));
+        var query = normalizeQuery(params.query || '');
+        var url = query ? buildSearchUrl(query, page) : appendPage(resolveListPath(params), page);
+
+        requestText(url, function (html) {
+            try {
+                var doc = htmlToDoc(html);
+                var results = parseCardsFromDoc(doc);
+
+                if (!results.length) {
+                    if (onError) onError();
+                    return;
+                }
+
+                onSuccess({
+                    results: results,
+                    page: page,
+                    total_pages: parsePagination(doc, page),
+                    source: SOURCE_KEY,
+                    url: params.url || '',
+                    query: query
+                });
+            } catch (e) {
+                log('parse cards error', e.message);
+                if (onError) onError();
+            }
+        }, function () {
+            if (onError) onError();
+        }, false, CACHE_MINUTES);
+    }
+
+    function extractBalanced(textValue, startIndex, openChar, closeChar) {
+        var depth = 0;
+        var inString = false;
+        var escaped = false;
+        var result = '';
+
+        for (var i = startIndex; i < textValue.length; i++) {
+            var ch = textValue.charAt(i);
+            result += ch;
+
+            if (inString) {
+                if (escaped) escaped = false;
+                else if (ch === '\\') escaped = true;
+                else if (ch === '"') inString = false;
+                continue;
+            }
+
+            if (ch === '"') {
+                inString = true;
+                continue;
+            }
+
+            if (ch === openChar) depth++;
+            else if (ch === closeChar) {
+                depth--;
+                if (depth === 0) return result;
+            }
+        }
+
+        return '';
+    }
+
+    function parseSeasonsFromEmbed(html) {
+        var raw = html || '';
+        var marker = 'seasons:[';
+        var index = raw.indexOf(marker);
+
+        if (index < 0) {
+            marker = '"seasons":[';
+            index = raw.indexOf(marker);
+        }
+
+        if (index < 0) return [];
+
+        var arrayStart = raw.indexOf('[', index);
+        if (arrayStart < 0) return [];
+
+        var arrayText = extractBalanced(raw, arrayStart, '[', ']');
+        if (!arrayText) return [];
+
+        try {
+            var parsed = JSON.parse(arrayText);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (e) {
+            log('seasons json parse error', e.message);
+            return [];
+        }
+    }
+
+    function mapEpisode(ep, seasonNumber, index) {
+        var episodeNumber = toInt(ep.episode, index + 1);
+        var subtitles = Array.isArray(ep.cc) ? ep.cc : [];
+        var subtitleList = subtitles.map(function (sub) {
+            return {
+                url: absUrl(sub.url || ''),
+                name: text(sub.name || '')
+            };
+        }).filter(function (sub) {
+            return !!sub.url;
+        });
+
+        var hls = ep.hls || '';
+        var dash = ep.dash || ep.dasha || '';
+        var mp4 = ep.mp4 || '';
+
+        return {
+            id: toInt(ep.id, Lampa.Utils.hash([seasonNumber, episodeNumber, ep.title || ''].join('_'))),
+            source: SOURCE_KEY,
+            season_number: seasonNumber,
+            episode_number: episodeNumber,
+            name: text(ep.title || ('Серия ' + episodeNumber)),
+            runtime: Math.max(0, Math.round(toInt(ep.duration, 0) / 60)),
+            hls: hls,
+            dash: dash,
+            mp4: mp4,
+            subtitles: subtitleList,
+            url: hls || dash || mp4 || ''
+        };
+    }
+
+    function mapSeasons(rawSeasons) {
+        var seasons = [];
+
+        for (var i = 0; i < rawSeasons.length; i++) {
+            var season = rawSeasons[i];
+            var seasonNumber = toInt(season.season, i + 1);
+            var rawEpisodes = Array.isArray(season.episodes) ? season.episodes : [];
+            var episodes = [];
+
+            for (var j = 0; j < rawEpisodes.length; j++) {
+                episodes.push(mapEpisode(rawEpisodes[j], seasonNumber, j));
+            }
+
+            seasons.push({
+                season_number: seasonNumber,
+                name: 'Сезон ' + seasonNumber,
+                episodes: episodes
+            });
+        }
+
+        seasons.sort(function (a, b) {
+            return a.season_number - b.season_number;
+        });
+
+        return seasons;
+    }
+
+    function firstEmbedCandidates(doc) {
+        var list = [];
+        var seen = {};
+        var tabs = doc.querySelectorAll('.tabs li[data-iframe]');
+
+        for (var i = 0; i < tabs.length; i++) {
+            var raw = text(tabs[i].getAttribute('data-iframe'));
+            if (!raw) continue;
+            var url = absUrl(raw);
+            if (!url || seen[url]) continue;
+            seen[url] = true;
+            list.push(url);
+        }
+
+        var embedMeta = doc.querySelector('[itemprop="embedUrl"]');
+        if (embedMeta) {
+            var embed = absUrl(embedMeta.getAttribute('href') || embedMeta.getAttribute('content') || '');
+            if (embed && !seen[embed]) list.push(embed);
+        }
+
+        list.sort(function (a, b) {
+            var ai = a.indexOf('api.variyt.ws/embed/') >= 0 ? 0 : 1;
+            var bi = b.indexOf('api.variyt.ws/embed/') >= 0 ? 0 : 1;
+            return ai - bi;
+        });
+
+        return list;
+    }
+
+    function parsePersonNames(doc, selector) {
+        var nodes = doc.querySelectorAll(selector);
+        var names = [];
+
+        for (var i = 0; i < nodes.length; i++) {
+            var name = text(nodes[i].textContent);
+            if (name) names.push(name);
+        }
+
+        return unique(names);
+    }
+
+    function parseFullCard(doc, fallbackCard, pageUrl) {
+        var title = text((doc.querySelector('h1[itemprop="name"]') || {}).textContent || fallbackCard.title || fallbackCard.name || '');
+        var facts = parseFacts(doc.querySelector('.shortimg'));
+        var year = toInt(pickFact(facts, ['год']), toInt(fallbackCard.year, 0));
+        var countries = splitCSV(pickFact(facts, ['страна']));
+        var genres = splitCSV(pickFact(facts, ['жанр']));
+        var poster = absUrl(((doc.querySelector('.poster img') || {}).getAttribute || function () { return ''; }).call(doc.querySelector('.poster img') || {}, 'src')) || absUrl((doc.querySelector('meta[itemprop="image"]') || {}).getAttribute ? (doc.querySelector('meta[itemprop="image"]').getAttribute('content') || '') : '') || fallbackCard.img || '';
+        var backdrop = absUrl((doc.querySelector('meta[property="og:image"]') || {}).getAttribute ? (doc.querySelector('meta[property="og:image"]').getAttribute('content') || '') : '') || poster;
+        var descNode = doc.querySelector('[itemprop="description"]');
+        var description = '';
+
+        if (descNode) {
+            var clone = descNode.cloneNode(true);
+            var extra = clone.querySelectorAll('h1, h2, h3, script, style');
+            for (var i = 0; i < extra.length; i++) extra[i].remove();
+            description = text(clone.textContent || '');
+        }
+
+        var voteAverage = toFloat(text((doc.querySelector('[itemprop="ratingValue"]') || {}).textContent || '').replace(',', '.'), 0);
+        var ratingText = doc.body ? doc.body.textContent : '';
+        var parsedRatings = parseRatings(ratingText || '');
+        var tv = isTvCard(title, genres, pageUrl || '');
+        var genreObjects = genres.map(function (name, index) {
+            return {
+                id: index + 1,
+                name: name
+            };
+        });
+        var id = fallbackCard.id || extractIdFromUrl(pageUrl);
+        var card = {
+            id: id || Lampa.Utils.hash(pageUrl || title),
+            kinogo_id: extractIdFromUrl(pageUrl) || id || 0,
+            source: SOURCE_KEY,
+            url: pageUrl,
+            title: title,
+            original_title: title,
+            overview: description || fallbackCard.overview || '',
+            description: description || fallbackCard.description || '',
+            vote_average: voteAverage || fallbackCard.vote_average || 0,
+            kp_rating: parsedRatings.kp || fallbackCard.kp_rating || 0,
+            imdb_rating: parsedRatings.imdb || fallbackCard.imdb_rating || 0,
+            genres: genreObjects,
+            genre_ids: genreObjects.map(function (g) { return g.id; }),
+            production_countries: countries.map(function (name) { return { name: name }; }),
+            img: poster || fallbackCard.img || './img/img_broken.svg',
+            poster: poster || fallbackCard.poster || fallbackCard.img || './img/img_broken.svg',
+            background_image: backdrop || fallbackCard.background_image || poster || './img/img_broken.svg',
+            type: tv ? 'tv' : 'movie'
+        };
+
+        if (year > 0) {
+            card.year = year;
+            if (tv) card.first_air_date = year + '-01-01';
+            else card.release_date = year + '-01-01';
+        }
+
+        if (tv) {
+            card.name = title;
+            card.original_name = title;
+        }
+
+        var directors = parsePersonNames(doc, '.actors');
+        var cast = parsePersonNames(doc, '.persone');
+        var persons = {
+            crew: directors.map(function (name, index) {
+                return {
+                    id: Lampa.Utils.hash('director_' + name + '_' + index),
+                    name: name,
+                    job: 'Director',
+                    known_for_department: 'Directing',
+                    source: SOURCE_KEY
+                };
+            }),
+            cast: cast.map(function (name, index) {
+                return {
+                    id: Lampa.Utils.hash('cast_' + name + '_' + index),
+                    name: name,
+                    known_for_department: 'Acting',
+                    source: SOURCE_KEY
+                };
+            })
+        };
+
+        return {
+            movie: card,
+            persons: persons
+        };
+    }
+
+    function getSeasonsByCardUrl(cardUrl, callback) {
+        var url = absUrl(cardUrl || '');
+        if (!url) {
+            callback([]);
+            return;
+        }
+
+        if (seasonsByUrl[url]) {
+            callback(seasonsByUrl[url]);
+            return;
+        }
+
+        requestText(url, function (html) {
+            var doc = htmlToDoc(html);
+            var embeds = firstEmbedCandidates(doc);
+
+            if (!embeds.length) {
+                seasonsByUrl[url] = [];
+                callback([]);
+                return;
+            }
+
+            var index = 0;
+
+            function tryNext() {
+                if (index >= embeds.length) {
+                    seasonsByUrl[url] = [];
+                    callback([]);
+                    return;
+                }
+
+                var embedUrl = embeds[index++];
+
+                requestText(embedUrl, function (embedHtml) {
+                    var rawSeasons = parseSeasonsFromEmbed(embedHtml);
+                    if (!rawSeasons.length) return tryNext();
+
+                    var mapped = mapSeasons(rawSeasons);
+                    seasonsByUrl[url] = mapped;
+                    callback(mapped);
+                }, function () {
+                    tryNext();
+                }, false, 20);
+            }
+
+            tryNext();
+        }, function () {
+            callback([]);
+        }, false, CACHE_MINUTES);
+    }
+
+    function extractDirectStreams(html) {
+        var data = html || '';
+        var streamRegex = /https?:\/\/[^"'\\\s]+?\.(?:m3u8|mp4)(?:\?[^"'\\\s]*)?/ig;
+        var found = [];
+        var match;
+
+        while ((match = streamRegex.exec(data)) !== null) {
+            found.push(match[0]);
+        }
+
+        return unique(found);
+    }
+
+    function main(params, oncomplite, onerror) {
+        var lines = [];
+        var loaded = 0;
+        var total = 2;
+
+        function pushLine(title, url, cards, totalPages) {
+            if (!cards || !cards.length) return;
+            lines.push({
+                title: title,
+                url: url,
+                page: 1,
+                total_pages: totalPages || 1,
+                results: cards.slice(0, 24),
+                source: SOURCE_KEY
+            });
+        }
+
+        function finish() {
+            loaded++;
+            if (loaded < total) return;
+
+            if (lines.length) oncomplite(lines);
+            else if (onerror) onerror();
+        }
+
+        requestText(BASE_URL + '/', function (html) {
+            try {
+                var doc = htmlToDoc(html);
+                pushLine('Обновления сериалов', '/new-serial/', parseSerialUpdatesFromDoc(doc), 1);
+                pushLine('Новинки', '/', parseCardsFromDoc(doc), parsePagination(doc, 1));
+            } catch (e) {
+                log('main parse error', e.message);
+            }
+
+            finish();
+        }, finish, false, CACHE_MINUTES);
+
+        fetchCardsPage({ url: '/filmis/novinki/', page: 1 }, function (data) {
+            pushLine('Фильмы: новинки', '/filmis/novinki/', data.results, data.total_pages || 1);
+            finish();
+        }, finish);
+    }
+
+    function category(params, oncomplite, onerror) {
+        var target = resolveListPath(params || {});
+
+        fetchCardsPage({
+            url: target,
+            page: 1
+        }, function (data) {
+            oncomplite([{
+                title: params.title || SOURCE_TITLE,
+                url: target,
+                page: data.page,
+                total_pages: data.total_pages,
+                results: data.results,
+                source: SOURCE_KEY
+            }]);
+        }, onerror);
+    }
+
+    function list(params, oncomplite, onerror) {
+        fetchCardsPage(params || {}, function (data) {
+            oncomplite(data);
+        }, onerror);
+    }
+
+    function full(params, oncomplite, onerror) {
+        var card = params.card || {};
+        var pageUrl = absUrl(card.url || params.url || cardUrlById[params.id] || '');
+
+        if (!pageUrl) {
+            notifyError('KinoGO: не найден URL карточки');
+            if (onerror) onerror();
+            return;
+        }
+
+        requestText(pageUrl, function (html) {
+            try {
+                var doc = htmlToDoc(html);
+                var parsed = parseFullCard(doc, card, pageUrl);
+                var result = {
+                    movie: parsed.movie
+                };
+
+                if (parsed.persons && (parsed.persons.cast.length || parsed.persons.crew.length)) {
+                    result.persons = parsed.persons;
+                }
+
+                var directStreams = extractDirectStreams(html);
+
+                getSeasonsByCardUrl(pageUrl, function (seasons) {
+                    if (seasons.length) {
+                        var isTv = !!parsed.movie.original_name || seasons.length > 1;
+                        var last = seasons[seasons.length - 1];
+                        var episodesCount = 0;
+
+                        for (var i = 0; i < seasons.length; i++) episodesCount += seasons[i].episodes.length;
+
+                        parsed.movie.number_of_seasons = seasons.length;
+                        parsed.movie.number_of_episodes = episodesCount;
+
+                        if (isTv) {
+                            parsed.movie.name = parsed.movie.name || parsed.movie.title;
+                            parsed.movie.original_name = parsed.movie.original_name || parsed.movie.original_title || parsed.movie.title;
+
+                            result.episodes = {
+                                name: last.name,
+                                season_number: last.season_number,
+                                seasons_count: seasons.length,
+                                episodes: last.episodes
+                            };
+                        } else if (last.episodes.length) {
+                            parsed.movie.kinogo_stream = last.episodes[0].url || '';
+                            parsed.movie.kinogo_subtitles = last.episodes[0].subtitles || [];
+                        }
+                    } else if (directStreams.length) {
+                        parsed.movie.kinogo_stream = directStreams[0];
+                        parsed.movie.kinogo_streams = directStreams.map(function (url) {
+                            return {
+                                quality: 'auto',
+                                url: url
+                            };
+                        });
+                    }
+
+                    oncomplite(result);
+                });
+            } catch (e) {
+                log('full parse error', e.message);
+                notifyError('KinoGO: ошибка парсинга карточки');
+                if (onerror) onerror();
+            }
+        }, function () {
+            if (onerror) onerror();
+        }, false, CACHE_MINUTES);
+    }
+
+    function seasons(tv, from, oncomplite) {
+        var card = tv || {};
+        var url = absUrl(card.url || cardUrlById[card.id] || '');
+        var need = Array.isArray(from) ? from : [];
+
+        if (!url || !need.length) {
+            oncomplite({});
+            return;
+        }
+
+        getSeasonsByCardUrl(url, function (allSeasons) {
+            var out = {};
+
+            for (var i = 0; i < need.length; i++) {
+                var number = toInt(need[i], 0);
+                var selected = null;
+
+                for (var j = 0; j < allSeasons.length; j++) {
+                    if (toInt(allSeasons[j].season_number, 0) === number) {
+                        selected = allSeasons[j];
+                        break;
+                    }
+                }
+
+                out['' + number] = selected ? {
+                    name: selected.name,
+                    season_number: selected.season_number,
+                    seasons_count: allSeasons.length,
+                    episodes: selected.episodes
+                } : {
+                    name: 'Сезон ' + number,
+                    season_number: number,
+                    seasons_count: allSeasons.length,
+                    episodes: []
+                };
+            }
+
+            oncomplite(out);
+        });
+    }
+
+    function menu(params, oncomplite) {
+        if (menuCache.expires > now() && menuCache.items.length) {
+            oncomplite(menuCache.items);
+            return;
+        }
+
+        requestText(BASE_URL + '/', function (html) {
+            try {
+                var doc = htmlToDoc(html);
+                var links = doc.querySelectorAll('a[href]');
+                var items = [
+                    { title: 'Новинки', id: '/' },
+                    { title: 'Фильмы', id: '/filmis/' },
+                    { title: 'Сериалы', id: '/new-serial/' }
+                ];
+                var seen = {
+                    '/': true,
+                    '/filmis/': true,
+                    '/new-serial/': true
+                };
+
+                for (var i = 0; i < links.length; i++) {
+                    var href = links[i].getAttribute('href') || '';
+                    var title = text(links[i].textContent || '');
+
+                    if (!title) continue;
+                    if (
+                        href.indexOf('/filmis/') !== 0 &&
+                        href.indexOf('/xfsearch/') !== 0 &&
+                        href.indexOf('/new-serial/') !== 0 &&
+                        !/^\/film-\d{4}\//.test(href) &&
+                        !/^\/filmi-\d{4}\//.test(href)
+                    ) continue;
+                    if (href.indexOf('/index.php') === 0) continue;
+                    if (seen[href]) continue;
+
+                    seen[href] = true;
+                    items.push({
+                        title: title,
+                        id: href
+                    });
+                }
+
+                menuCache.items = items;
+                menuCache.expires = now() + 1000 * 60 * CACHE_MINUTES;
+
+                oncomplite(items);
+            } catch (e) {
+                log('menu parse error', e.message);
+                oncomplite([
+                    { title: 'Новинки', id: '/' },
+                    { title: 'Фильмы', id: '/filmis/' },
+                    { title: 'Сериалы', id: '/new-serial/' }
+                ]);
+            }
+        }, function () {
+            oncomplite([
+                { title: 'Новинки', id: '/' },
+                { title: 'Фильмы', id: '/filmis/' },
+                { title: 'Сериалы', id: '/new-serial/' }
+            ]);
+        }, false, CACHE_MINUTES);
+    }
+
+    function menuCategory(params, oncomplite) {
+        var action = (params && params.action) || 'movie';
+        if (action === 'tv') {
+            oncomplite([
+                { title: 'Новинки сериалов', url: '/new-serial/' },
+                { title: 'Популярные сериалы', url: '/new-serial/' }
+            ]);
+        } else {
+            oncomplite([
+                { title: 'Новинки', url: '/' },
+                { title: 'Все фильмы', url: '/filmis/' }
+            ]);
+        }
+    }
+
+    function search(params, oncomplite, maybeOncomplite) {
+        var input = params;
+        var page = 1;
+        var callback = oncomplite;
+
+        if (typeof params === 'string') {
+            if (typeof oncomplite === 'function') {
+                input = { query: params, page: 1 };
+                callback = oncomplite;
+            } else {
+                input = { query: params, page: toInt(oncomplite, 1) };
+                callback = maybeOncomplite;
+            }
+        }
+
+        if (typeof callback !== 'function') callback = function () {};
+
+        var query = normalizeQuery((input || {}).query || '');
+        page = Math.max(1, toInt((input || {}).page, 1));
+
+        if (!query || query.length < 2) {
+            callback([]);
+            return;
+        }
+
+        fetchCardsPage({ query: query, page: page }, function (data) {
+            var movie = [];
+            var tv = [];
+
+            for (var i = 0; i < data.results.length; i++) {
+                if (data.results[i].name) tv.push(data.results[i]);
+                else movie.push(data.results[i]);
+            }
+
+            var out = [];
+
+            if (movie.length) out.push({ title: 'Фильмы', type: 'movie', results: movie });
+            if (tv.length) out.push({ title: 'Сериалы', type: 'tv', results: tv });
+            if (!out.length && data.results.length) out.push({ title: 'Результаты', type: 'movie', results: data.results });
+
+            callback(out);
+        }, function () {
+            callback([]);
+        });
+    }
+
+    function discovery() {
+        return {
+            title: SOURCE_TITLE,
+            search: search,
+            params: {
+                save: true
+            },
+            onMore: function (params, close) {
+                if (close) close();
+
+                Lampa.Activity.push({
+                    url: '',
+                    title: 'Поиск - ' + (params.query || ''),
+                    component: 'category_full',
+                    page: 1,
+                    query: encodeURIComponent(params.query || ''),
+                    source: SOURCE_KEY
+                });
+            },
+            onCancel: function () {
+                network.clear();
+            }
+        };
+    }
+
+    function clear() {
+        network.clear();
+        memoryCache = {};
+    }
+
+    var sourceApi = {
+        main: main,
+        category: category,
+        list: list,
+        full: full,
+        seasons: seasons,
+        menu: menu,
+        menuCategory: menuCategory,
+        search: search,
+        discovery: discovery,
+        clear: clear
+    };
+
+    function refreshSourceSettings() {
+        if (!Lampa.Params || !Lampa.Params.select || !Lampa.Api || !Lampa.Api.sources) return;
+
+        var sourceOptions = {};
+        var sources = Lampa.Api.sources;
+
+        for (var key in sources) {
+            if (!Object.prototype.hasOwnProperty.call(sources, key)) continue;
+            if (key === 'tmdb') sourceOptions[key] = 'TMDB';
+            else if (key === 'cub') sourceOptions[key] = 'CUB';
+            else if (key === SOURCE_KEY) sourceOptions[key] = SOURCE_TITLE;
+            else sourceOptions[key] = key.toUpperCase();
+        }
+
+        if (!sourceOptions[SOURCE_KEY]) sourceOptions[SOURCE_KEY] = SOURCE_TITLE;
+
+        Lampa.Params.select('source', sourceOptions, Lampa.Storage.get('source', 'tmdb'));
+    }
+
+    function register() {
+        if (!Lampa || !Lampa.Api || !Lampa.Api.sources) return;
+        if (Lampa.Api.sources[SOURCE_KEY]) return;
+
+        Lampa.Api.sources[SOURCE_KEY] = sourceApi;
+        refreshSourceSettings();
+        log('source registered');
+    }
+
+    function start() {
+        try {
+            register();
+        } catch (e) {
+            log('start error', e.message);
+            if (Lampa.Noty) Lampa.Noty.show('KinoGO: ошибка инициализации источника');
+        }
+    }
+
+    if (window.appready) start();
+    else {
+        Lampa.Listener.follow('app', function (e) {
+            if (e.type === 'ready') start();
+        });
+        Lampa.Listener.follow('appready', start);
+    }
+})();
