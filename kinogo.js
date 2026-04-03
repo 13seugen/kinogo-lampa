@@ -10,8 +10,8 @@
     var CACHE_MINUTES = 45;
     var REQUEST_TIMEOUT = 25000;
 
-    var network = new Lampa.Reguest();
-    network.timeout(REQUEST_TIMEOUT);
+    var network = null;
+    var listenersBound = false;
 
     var memoryCache = {};
     var cardUrlById = {};
@@ -33,8 +33,34 @@
         return Date.now();
     }
 
+    function hashValue(input) {
+        var str = (input || '') + '';
+
+        if (window.Lampa && Lampa.Utils && typeof Lampa.Utils.hash === 'function') {
+            return Lampa.Utils.hash(str);
+        }
+
+        var hash = 0;
+        for (var i = 0; i < str.length; i++) {
+            hash = ((hash << 5) - hash) + str.charCodeAt(i);
+            hash |= 0;
+        }
+
+        return String(Math.abs(hash));
+    }
+
+    function ensureNetwork() {
+        if (network) return network;
+        if (!window.Lampa || !Lampa.Reguest) return null;
+
+        network = new Lampa.Reguest();
+        network.timeout(REQUEST_TIMEOUT);
+
+        return network;
+    }
+
     function notifyError(message) {
-        if (!Lampa.Noty) return;
+        if (!window.Lampa || !Lampa.Noty) return;
         if (now() - lastNotyAt < 5000) return;
         lastNotyAt = now();
         Lampa.Noty.show(message);
@@ -164,6 +190,12 @@
     }
 
     function requestText(url, onSuccess, onError, postData, ttlMinutes) {
+        var req = ensureNetwork();
+        if (!req) {
+            if (onError) onError({ status: 0, responseText: 'Lampa not ready' }, 'not_ready');
+            return;
+        }
+
         var target = proxiedUrl(url);
         var cacheKey = 'TEXT::' + target + '::' + JSON.stringify(postData || {});
         var cached = cacheGet(cacheKey);
@@ -173,7 +205,7 @@
             return;
         }
 
-        network.silent(target, function (data) {
+        req.silent(target, function (data) {
             var html = typeof data === 'string' ? data : (data || '') + '';
             cacheSet(cacheKey, html, ttlMinutes || CACHE_MINUTES);
             onSuccess(html);
@@ -181,7 +213,7 @@
             var decoded = '';
 
             try {
-                decoded = network.errorDecode(a, b);
+                decoded = req.errorDecode(a, b);
             } catch (e) {
                 decoded = '';
             }
@@ -309,7 +341,7 @@
             };
         });
         var card = {
-            id: id || Lampa.Utils.hash(url),
+            id: id || hashValue(url),
             source: SOURCE_KEY,
             url: url,
             kinogo_id: id || 0,
@@ -346,13 +378,111 @@
         return card;
     }
 
-    function parseCardsFromDoc(doc) {
-        var nodes = doc.querySelectorAll('.shortstory');
-        var cards = [];
+    function looksLikeCardUrl(url) {
+        return /\/\d+-[^/]+\.html?$/i.test(url || '');
+    }
 
-        for (var i = 0; i < nodes.length; i++) {
-            var card = parseCardFromShortstory(nodes[i]);
-            if (card) cards.push(card);
+    function buildCardFromParts(url, title, poster, year, genres, description, sourceNodeText) {
+        if (!looksLikeCardUrl(url)) return null;
+        if (!title) return null;
+
+        var id = extractIdFromUrl(url);
+        var cleanTitle = stripTags(title);
+        var genreObjects = (genres || []).map(function (name, index) {
+            return {
+                id: index + 1,
+                name: name
+            };
+        });
+        var parsedRatings = parseRatings(sourceNodeText || '');
+        var tv = isTvCard(cleanTitle, genres || [], url);
+        var card = {
+            id: id || hashValue(url),
+            source: SOURCE_KEY,
+            url: url,
+            kinogo_id: id || 0,
+            title: cleanTitle,
+            original_title: cleanTitle,
+            overview: description || '',
+            description: description || '',
+            vote_average: 0,
+            kp_rating: parsedRatings.kp || 0,
+            imdb_rating: parsedRatings.imdb || 0,
+            genres: genreObjects,
+            genre_ids: genreObjects.map(function (g) { return g.id; }),
+            img: poster || './img/img_broken.svg',
+            poster: poster || './img/img_broken.svg',
+            background_image: poster || './img/img_broken.svg',
+            type: tv ? 'tv' : 'movie'
+        };
+
+        if (year > 0) {
+            card.year = year;
+            if (tv) card.first_air_date = year + '-01-01';
+            else card.release_date = year + '-01-01';
+        }
+
+        if (tv) {
+            card.name = cleanTitle;
+            card.original_name = cleanTitle;
+        }
+
+        cardUrlById[card.id] = url;
+        return card;
+    }
+
+    function parseCardFromAnchor(anchor) {
+        if (!anchor) return null;
+
+        var url = absUrl(anchor.getAttribute('href') || '');
+        if (!looksLikeCardUrl(url)) return null;
+
+        var node = anchor;
+        for (var i = 0; i < 5; i++) {
+            if (!node || !node.parentElement) break;
+            node = node.parentElement;
+        }
+
+        var title = text(anchor.getAttribute('title') || anchor.textContent || '');
+        var imgNode = node ? node.querySelector('img[data-src], img[src]') : null;
+        var poster = absUrl((imgNode && (imgNode.getAttribute('data-src') || imgNode.getAttribute('src'))) || '');
+        var facts = parseFacts(node);
+        var year = toInt(pickFact(facts, ['год']), 0);
+        var yearFromTitle = (title.match(/\((19|20)\d{2}\)/) || [])[0];
+        if (!year && yearFromTitle) year = toInt(yearFromTitle.replace(/[^\d]/g, ''), 0);
+        var genres = splitCSV(pickFact(facts, ['жанр']));
+        var description = node ? text(node.textContent || '').slice(0, 450) : '';
+
+        if (!poster && !year && !/(сезон|серия|film|movie|serial|сериал)/i.test((title || '').toLowerCase())) {
+            return null;
+        }
+
+        return buildCardFromParts(url, title, poster, year, genres, description, node ? node.textContent : '');
+    }
+
+    function parseCardsFromDoc(doc) {
+        var cards = [];
+        var uniq = {};
+        var i;
+
+        function push(card) {
+            if (!card || !card.url) return;
+            if (uniq[card.url]) return;
+            uniq[card.url] = true;
+            cards.push(card);
+        }
+
+        var nodes = doc.querySelectorAll('.shortstory');
+        for (i = 0; i < nodes.length; i++) {
+            push(parseCardFromShortstory(nodes[i]));
+        }
+
+        if (cards.length < 5) {
+            var anchors = doc.querySelectorAll('a[href*=".html"], a[href*="/serial"], a[href*="/movie"]');
+
+            for (i = 0; i < anchors.length; i++) {
+                push(parseCardFromAnchor(anchors[i]));
+            }
         }
 
         return cards;
@@ -374,7 +504,7 @@
             if (!url || !title) continue;
 
             var card = {
-                id: id || Lampa.Utils.hash(url),
+                id: id || hashValue(url),
                 source: SOURCE_KEY,
                 url: url,
                 kinogo_id: id || 0,
@@ -594,7 +724,7 @@
         var mp4 = ep.mp4 || '';
 
         return {
-            id: toInt(ep.id, Lampa.Utils.hash([seasonNumber, episodeNumber, ep.title || ''].join('_'))),
+            id: toInt(ep.id, hashValue([seasonNumber, episodeNumber, ep.title || ''].join('_'))),
             source: SOURCE_KEY,
             season_number: seasonNumber,
             episode_number: episodeNumber,
@@ -706,7 +836,7 @@
         });
         var id = fallbackCard.id || extractIdFromUrl(pageUrl);
         var card = {
-            id: id || Lampa.Utils.hash(pageUrl || title),
+            id: id || hashValue(pageUrl || title),
             kinogo_id: extractIdFromUrl(pageUrl) || id || 0,
             source: SOURCE_KEY,
             url: pageUrl,
@@ -742,7 +872,7 @@
         var persons = {
             crew: directors.map(function (name, index) {
                 return {
-                    id: Lampa.Utils.hash('director_' + name + '_' + index),
+                    id: hashValue('director_' + name + '_' + index),
                     name: name,
                     job: 'Director',
                     known_for_department: 'Directing',
@@ -751,7 +881,7 @@
             }),
             cast: cast.map(function (name, index) {
                 return {
-                    id: Lampa.Utils.hash('cast_' + name + '_' + index),
+                    id: hashValue('cast_' + name + '_' + index),
                     name: name,
                     known_for_department: 'Acting',
                     source: SOURCE_KEY
@@ -1087,6 +1217,21 @@
         }
     }
 
+    function isLikelyMediaResult(card) {
+        if (!card || !card.url) return false;
+        if (!looksLikeCardUrl(card.url)) return false;
+
+        var title = (card.title || card.name || '').toLowerCase();
+        var hasYear = !!card.year || /\((19|20)\d{2}\)/.test(title);
+        var mediaHint = /(сезон|серия|сериал|фильм|movie|film|serial|anime)/i.test(title);
+        var hasGenres = Array.isArray(card.genres) && card.genres.length > 0;
+
+        if (hasYear || mediaHint || hasGenres) return true;
+        if (card.img && card.img.indexOf('img_broken') === -1) return true;
+
+        return false;
+    }
+
     function search(params, oncomplite, maybeOncomplite) {
         var input = params;
         var page = 1;
@@ -1113,12 +1258,14 @@
         }
 
         fetchCardsPage({ query: query, page: page }, function (data) {
+            var filtered = data.results.filter(isLikelyMediaResult);
+            var base = filtered.length ? filtered : data.results;
             var movie = [];
             var tv = [];
 
-            for (var i = 0; i < data.results.length; i++) {
-                if (data.results[i].name) tv.push(data.results[i]);
-                else movie.push(data.results[i]);
+            for (var i = 0; i < base.length; i++) {
+                if (base[i].name) tv.push(base[i]);
+                else movie.push(base[i]);
             }
 
             var out = [];
@@ -1153,13 +1300,15 @@
                 });
             },
             onCancel: function () {
-                network.clear();
+                var req = ensureNetwork();
+                if (req) req.clear();
             }
         };
     }
 
     function clear() {
-        network.clear();
+        var req = ensureNetwork();
+        if (req) req.clear();
         memoryCache = {};
     }
 
@@ -1209,15 +1358,33 @@
             register();
         } catch (e) {
             log('start error', e.message);
-            if (Lampa.Noty) Lampa.Noty.show('KinoGO: ошибка инициализации источника');
+            notifyError('KinoGO: ошибка инициализации источника');
         }
     }
 
-    if (window.appready) start();
-    else {
-        Lampa.Listener.follow('app', function (e) {
-            if (e.type === 'ready') start();
-        });
-        Lampa.Listener.follow('appready', start);
+    function bindListeners() {
+        if (listenersBound) return true;
+        if (!window.Lampa || !Lampa.Listener || !Lampa.Api) return false;
+
+        listenersBound = true;
+
+        if (window.appready) {
+            start();
+        } else {
+            Lampa.Listener.follow('app', function (e) {
+                if (e.type === 'ready') start();
+            });
+            Lampa.Listener.follow('appready', start);
+        }
+
+        return true;
+    }
+
+    if (!bindListeners()) {
+        var retries = 0;
+        var waitTimer = setInterval(function () {
+            retries++;
+            if (bindListeners() || retries > 120) clearInterval(waitTimer);
+        }, 500);
     }
 })();
