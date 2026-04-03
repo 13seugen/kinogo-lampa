@@ -12,6 +12,7 @@
 
     var network = null;
     var listenersBound = false;
+    var cardBridgeBound = false;
 
     var memoryCache = {};
     var cardUrlById = {};
@@ -1232,6 +1233,258 @@
         return false;
     }
 
+    function normalizeForMatch(value) {
+        return text((value || '')
+            .toLowerCase()
+            .replace(/ё/g, 'е')
+            .replace(/[^a-zа-я0-9]+/gi, ' '));
+    }
+
+    function extractYearFromDate(dateStr) {
+        var match = ((dateStr || '') + '').match(/(19|20)\d{2}/);
+        return match ? toInt(match[0], 0) : 0;
+    }
+
+    function extractMovieYear(movie) {
+        if (!movie) return 0;
+        var year = toInt(movie.year, 0);
+        if (year > 0) return year;
+
+        year = extractYearFromDate(movie.release_date);
+        if (year > 0) return year;
+
+        year = extractYearFromDate(movie.first_air_date);
+        if (year > 0) return year;
+
+        return 0;
+    }
+
+    function extractCardYear(card) {
+        if (!card) return 0;
+        var year = toInt(card.year, 0);
+        if (year > 0) return year;
+
+        year = extractYearFromDate(card.release_date);
+        if (year > 0) return year;
+
+        year = extractYearFromDate(card.first_air_date);
+        if (year > 0) return year;
+
+        return 0;
+    }
+
+    function movieTitleVariants(movie) {
+        var raw = [];
+        var out = [];
+        var uniq = {};
+
+        if (!movie) return out;
+
+        raw.push(movie.title || '');
+        raw.push(movie.name || '');
+        raw.push(movie.original_title || '');
+        raw.push(movie.original_name || '');
+
+        for (var i = 0; i < raw.length; i++) {
+            var candidate = text(raw[i] || '');
+            if (!candidate) continue;
+            var norm = normalizeForMatch(candidate);
+            if (!norm || uniq[norm]) continue;
+            uniq[norm] = true;
+            out.push(candidate);
+        }
+
+        return out;
+    }
+
+    function dedupeCards(cards) {
+        var list = Array.isArray(cards) ? cards : [];
+        var out = [];
+        var seen = {};
+
+        for (var i = 0; i < list.length; i++) {
+            var item = list[i];
+            var key = (item && item.url) || (item && item.id) || ('idx_' + i);
+            if (!item || seen[key]) continue;
+            seen[key] = true;
+            out.push(item);
+        }
+
+        return out;
+    }
+
+    function scoreCardMatch(card, titleNorms, year) {
+        if (!card) return 0;
+
+        var score = 0;
+        var cardTitle = normalizeForMatch(card.title || card.name || '');
+        var cardYear = extractCardYear(card);
+
+        for (var i = 0; i < titleNorms.length; i++) {
+            var q = titleNorms[i];
+            if (!q || !cardTitle) continue;
+            if (cardTitle === q) score += 100;
+            else if (cardTitle.indexOf(q) >= 0) score += 70;
+            else if (q.indexOf(cardTitle) >= 0) score += 40;
+        }
+
+        if (year > 0 && cardYear > 0) {
+            if (year === cardYear) score += 25;
+            else if (Math.abs(year - cardYear) === 1) score += 8;
+        }
+
+        return score;
+    }
+
+    function openKinogoSearchFromMovie(movie) {
+        var query = '';
+        if (movie) query = text(movie.title || movie.name || movie.original_title || movie.original_name || '');
+        if (!query) {
+            notifyError('KinoGO: пустой запрос поиска');
+            return;
+        }
+
+        Lampa.Activity.push({
+            url: '',
+            title: 'KinoGO: ' + query,
+            component: 'category_full',
+            page: 1,
+            query: encodeURIComponent(query),
+            source: SOURCE_KEY
+        });
+    }
+
+    function findKinogoCardByMovie(movie, onDone) {
+        var variants = movieTitleVariants(movie);
+        var titleNorms = [];
+        var year = extractMovieYear(movie);
+        var merged = [];
+        var maxQueries = Math.min(2, variants.length);
+        var index = 0;
+
+        for (var i = 0; i < variants.length; i++) {
+            titleNorms.push(normalizeForMatch(variants[i]));
+        }
+
+        if (!maxQueries) {
+            onDone(null);
+            return;
+        }
+
+        function finish() {
+            var candidates = dedupeCards(merged);
+            var best = null;
+            var bestScore = 0;
+
+            for (var n = 0; n < candidates.length; n++) {
+                var card = candidates[n];
+                var score = scoreCardMatch(card, titleNorms, year);
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = card;
+                }
+            }
+
+            if (best && bestScore >= 55) onDone(best);
+            else onDone(null);
+        }
+
+        function next() {
+            if (index >= maxQueries) {
+                finish();
+                return;
+            }
+
+            var query = variants[index++];
+
+            fetchCardsPage({ query: query, page: 1 }, function (data) {
+                if (data && Array.isArray(data.results)) {
+                    merged = merged.concat(data.results);
+                }
+                next();
+            }, function () {
+                next();
+            });
+        }
+
+        next();
+    }
+
+    function openKinogoFromCardMovie(movie) {
+        if (!movie) {
+            notifyError('KinoGO: фильм не найден в карточке');
+            return;
+        }
+
+        findKinogoCardByMovie(movie, function (card) {
+            if (!card) {
+                openKinogoSearchFromMovie(movie);
+                return;
+            }
+
+            Lampa.Activity.push({
+                url: '',
+                title: card.title || card.name || 'KinoGO',
+                component: 'full',
+                card: card,
+                source: SOURCE_KEY
+            });
+        });
+    }
+
+    function addCardBridgeButton(render, movie) {
+        if (!render || !render.length || !window.$) return;
+        if (!movie) return;
+        if (render.find('.kinogo-bridge-button').length) return;
+
+        var btn = $('<div class="full-start__button selector kinogo-bridge-button">KinoGO</div>');
+
+        btn.on('hover:enter', function () {
+            openKinogoFromCardMovie(movie);
+        });
+        btn.on('click', function () {
+            openKinogoFromCardMovie(movie);
+        });
+
+        render.append(btn);
+    }
+
+    function bindCardBridge() {
+        if (cardBridgeBound) return true;
+        if (!window.Lampa || !Lampa.Listener) return false;
+
+        cardBridgeBound = true;
+
+        Lampa.Listener.follow('full', function (e) {
+            try {
+                if (!e || e.type !== 'complite' || !e.data || !e.data.movie) return;
+                var act = e.object && e.object.activity;
+                if (!act || !act.render) return;
+
+                var root = act.render();
+                var place = root.find('.view--torrent');
+                if (!place.length) place = root.find('.full-start');
+                if (!place.length) place = root;
+
+                addCardBridgeButton(place, e.data.movie);
+            } catch (err) {
+                log('card bridge error', err.message);
+            }
+        });
+
+        try {
+            var active = Lampa.Activity && Lampa.Activity.active ? Lampa.Activity.active() : null;
+            if (active && active.component === 'full' && active.activity && active.activity.render) {
+                var activePlace = active.activity.render().find('.view--torrent');
+                if (!activePlace.length) activePlace = active.activity.render().find('.full-start');
+                if (!activePlace.length) activePlace = active.activity.render();
+                addCardBridgeButton(activePlace, active.card || {});
+            }
+        } catch (e) {}
+
+        return true;
+    }
+
     function search(params, oncomplite, maybeOncomplite) {
         var input = params;
         var page = 1;
@@ -1356,6 +1609,7 @@
     function start() {
         try {
             register();
+            bindCardBridge();
         } catch (e) {
             log('start error', e.message);
             notifyError('KinoGO: ошибка инициализации источника');
