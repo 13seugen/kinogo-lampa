@@ -1435,19 +1435,34 @@
 
     function addCardBridgeButton(render, movie) {
         if (!render || !render.length || !window.$) return;
-        if (!movie) return;
-        if (render.find('.kinogo-bridge-button').length) return;
+        var context = render;
+        var root = render.closest ? render.closest('.full-start, .full-start-new, .full-start__buttons, .full-start-new__buttons') : $();
+        var hasButton = false;
 
-        var btn = $('<div class="full-start__button selector kinogo-bridge-button">KinoGO</div>');
+        if (render.find && render.find('.kinogo-bridge-button').length) hasButton = true;
+        if (!hasButton && root.length && root.find('.kinogo-bridge-button').length) hasButton = true;
+        if (hasButton) return;
+
+        var btn = $('<div class="full-start__button selector view--online kinogo-bridge-button">KinoGO</div>');
 
         btn.on('hover:enter', function () {
-            openKinogoFromCardMovie(movie);
+            openKinogoFromCardMovie(movie || resolveActiveMovieCard() || {});
         });
         btn.on('click', function () {
-            openKinogoFromCardMovie(movie);
+            openKinogoFromCardMovie(movie || resolveActiveMovieCard() || {});
         });
 
-        render.append(btn);
+        if (context.hasClass && (context.hasClass('full-start__button') || context.hasClass('view--torrent') || context.hasClass('view--online'))) {
+            context.after(btn);
+            return;
+        }
+
+        if (context.children && context.children('.full-start__button').length) {
+            context.children('.full-start__button').last().after(btn);
+            return;
+        }
+
+        context.append(btn);
     }
 
     function resolveActiveMovieCard() {
