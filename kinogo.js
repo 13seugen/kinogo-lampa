@@ -13,6 +13,7 @@
     var network = null;
     var listenersBound = false;
     var cardBridgeBound = false;
+    var cardBridgeTimer = null;
 
     var memoryCache = {};
     var cardUrlById = {};
@@ -1449,6 +1450,36 @@
         render.append(btn);
     }
 
+    function resolveActiveMovieCard() {
+        try {
+            if (!Lampa.Activity || !Lampa.Activity.active) return null;
+            var active = Lampa.Activity.active();
+            if (!active || active.component !== 'full') return null;
+
+            return active.card || (active.activity && active.activity.card) || null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function ensureBridgeInActiveFull() {
+        try {
+            if (!Lampa.Activity || !Lampa.Activity.active) return;
+            var active = Lampa.Activity.active();
+            if (!active || active.component !== 'full' || !active.activity || !active.activity.render) return;
+
+            var root = active.activity.render();
+            if (!root || !root.length) return;
+
+            var place = root.find('.view--torrent');
+            if (!place.length) place = root.find('.full-start');
+            if (!place.length) place = root.find('.full-start-new');
+            if (!place.length) place = root;
+
+            addCardBridgeButton(place, resolveActiveMovieCard());
+        } catch (e) {}
+    }
+
     function bindCardBridge() {
         if (cardBridgeBound) return true;
         if (!window.Lampa || !Lampa.Listener) return false;
@@ -1481,6 +1512,10 @@
                 addCardBridgeButton(activePlace, active.card || {});
             }
         } catch (e) {}
+
+        if (!cardBridgeTimer) {
+            cardBridgeTimer = setInterval(ensureBridgeInActiveFull, 1500);
+        }
 
         return true;
     }
