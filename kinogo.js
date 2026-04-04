@@ -1,13 +1,13 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-15';
+    var PLUGIN_VERSION = '20260404-16';
     if (window.kinogo_source_plugin_version === PLUGIN_VERSION) return;
     window.kinogo_source_plugin_version = PLUGIN_VERSION;
 
     var SOURCE_KEY = 'kinogo';
     var SOURCE_TITLE = 'KinoGO';
-    var BASE_URL = 'https://kinogo.ec';
+    var BASE_URL = 'https://kinogo.li';
     var CACHE_MINUTES = 45;
     var REQUEST_TIMEOUT = 25000;
 
@@ -665,14 +665,17 @@
         return maxPage;
     }
 
-    function buildSearchUrl(query, page) {
+    function buildSearchRequest(query, page) {
         var encoded = encodeCP1251URIComponent(query || '');
-        var url = BASE_URL + '/index.php?do=search&subaction=search&story=' + encoded;
         var p = Math.max(1, toInt(page, 1));
+        var body = 'subaction=search&story=' + encoded;
 
-        if (p > 1) url += '&search_start=' + p;
+        if (p > 1) body += '&search_start=' + p;
 
-        return url;
+        return {
+            url: BASE_URL + '/index.php?do=search',
+            postData: body
+        };
     }
 
     function buildSearchUrlFallback(query, page) {
@@ -732,7 +735,14 @@
     function fetchCardsPage(params, onSuccess, onError) {
         var page = Math.max(1, toInt(params.page, 1));
         var query = normalizeQuery(params.query || '');
-        var url = query ? buildSearchUrl(query, page) : appendPage(resolveListPath(params), page);
+        var url = appendPage(resolveListPath(params), page);
+        var postData = false;
+
+        if (query) {
+            var searchRequest = buildSearchRequest(query, page);
+            url = searchRequest.url;
+            postData = searchRequest.postData;
+        }
 
         requestText(url, function (html) {
             try {
@@ -793,7 +803,7 @@
             }
         }, function () {
             if (onError) onError();
-        }, false, CACHE_MINUTES, {
+        }, postData, CACHE_MINUTES, {
             suppress404: true,
             suppressNoty: !!query
         });
