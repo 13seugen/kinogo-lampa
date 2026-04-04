@@ -1049,29 +1049,7 @@
         attachDiscoverySource();
     }
 
-    function addKinoSearchButton(place, card) {
-        try {
-            if (!place || !place.length) { console.log('[KinoSearch] no place'); return; }
-
-            var container = place[0];
-            if (!container) { console.log('[KinoSearch] no container'); return; }
-
-            var existing = container.querySelector('.kinosearch-bridge-btn');
-            console.log('[KinoSearch] existing btn:', !!existing, 'container tag:', container.tagName, 'container class:', container.className);
-            if (existing) return;
-
-            var btn = document.createElement('div');
-            btn.className = 'full-start__button selector kinosearch-bridge-btn';
-            btn.innerHTML = 'KinoSearch';
-            btn.style.cssText = 'cursor:pointer;margin-top:4px;display:block;color:white;padding:8px;';
-
-            container.appendChild(btn);
-            console.log('[KinoSearch] button added, container children:', container.children.length);
-        }
-        catch (e) {
-            console.log('[KinoSearch] addButton error:', e.message);
-        }
-    }
+    function addKinoSearchButton(place, card) {}
 
     function ensureBridgeInActiveFull() {
         try {
@@ -1082,17 +1060,13 @@
 
             var root = active.activity.render();
             if (!root || !root.length) return;
-
             if (root.find('.kinosearch-bridge-btn').length) return;
 
             var card = active.card || (active.activity && active.activity.card) || {};
+            var jq = (window.Lampa && Lampa.$) ? Lampa.$ : window.$;
+            if (!jq) return;
 
-            var $ = window.Lampa && Lampa.$ ? Lampa.$ : window.$;
-            if (!$) return;
-
-            var btn = $('<div>')
-                .addClass('full-start__button selector kinosearch-bridge-btn')
-                .text('KinoSearch');
+            var btn = jq('<div class="full-start__button selector kinosearch-bridge-btn">KinoSearch</div>');
 
             btn.on('hover:enter click', function() {
                 if (!Lampa.Api || !Lampa.Api.sources || !Lampa.Api.sources[SOURCE_ID]) return;
@@ -1108,13 +1082,13 @@
             var place = root.find('.view--torrent');
             if (!place.length) place = root.find('.full-start-new');
             if (!place.length) place = root.find('.full-start');
-            if (place.length) {
-                var lastBtn = place.find('.full-start__button').last();
-                if (lastBtn.length) lastBtn.after(btn);
-                else place.append(btn);
-            }
+            if (!place.length) return;
 
-            console.log('[KinoSearch] button injected via Lampa.$');
+            var lastBtn = place.find('.full-start__button').last();
+            if (lastBtn.length) lastBtn.after(btn);
+            else place.append(btn);
+
+            console.log('[KinoSearch] button injected');
         }
         catch (e) {
             console.log('[KinoSearch] error:', e.message);
