@@ -1071,78 +1071,98 @@
 
     function full(params, oncomplite, onerror) {
         var card = params.card || {};
-        var pageUrl = absUrl(card.url || params.url || cardUrlById[params.id] || '');
+        var pageUrl = absUrl(card.url || params.url || cardUrlById[params.id] || '').replace(/#.*$/, '');
 
-        if (!pageUrl) {
-            notifyError('KinoGO: не найден URL карточки');
-            if (onerror) onerror();
-            return;
-        }
-
-        requestText(pageUrl, function (html) {
-            try {
-                var doc = htmlToDoc(html);
-                var parsed = parseFullCard(doc, card, pageUrl);
-                var result = {
-                    movie: parsed.movie
-                };
-
-                if (parsed.persons && (parsed.persons.cast.length || parsed.persons.crew.length)) {
-                    result.persons = parsed.persons;
-                }
-
-                var directStreams = extractDirectStreams(html);
-
-                getSeasonsByCardUrl(pageUrl, function (seasons) {
-                    if (seasons.length) {
-                        var isTv = !!parsed.movie.original_name || seasons.length > 1;
-                        var last = seasons[seasons.length - 1];
-                        var episodesCount = 0;
-
-                        for (var i = 0; i < seasons.length; i++) episodesCount += seasons[i].episodes.length;
-
-                        parsed.movie.number_of_seasons = seasons.length;
-                        parsed.movie.number_of_episodes = episodesCount;
-
-                        if (isTv) {
-                            parsed.movie.name = parsed.movie.name || parsed.movie.title;
-                            parsed.movie.original_name = parsed.movie.original_name || parsed.movie.original_title || parsed.movie.title;
-
-                            result.episodes = {
-                                name: last.name,
-                                season_number: last.season_number,
-                                seasons_count: seasons.length,
-                                episodes: last.episodes
-                            };
-                        } else if (last.episodes.length) {
-                            parsed.movie.kinogo_stream = last.episodes[0].url || '';
-                            parsed.movie.kinogo_subtitles = last.episodes[0].subtitles || [];
-                        }
-                    } else if (directStreams.length) {
-                        parsed.movie.kinogo_stream = directStreams[0];
-                        parsed.movie.kinogo_streams = directStreams.map(function (url) {
-                            return {
-                                quality: 'auto',
-                                url: url
-                            };
-                        });
-                    }
-
-                    oncomplite(result);
-                });
-            } catch (e) {
-                log('full parse error', e.message);
-                notifyError('KinoGO: ошибка парсинга карточки');
+        function finalizeByUrl(activeCard, activeUrl, canRetryBySearch) {
+            if (!activeUrl) {
+                notifyError('KinoGO: не найден URL карточки');
                 if (onerror) onerror();
-            }
-        }, function (err) {
-            var status = toInt((err || {}).status, 0);
-            if (status === 404) {
-                openKinogoSearchFromMovie(card);
                 return;
             }
-            if (onerror) onerror();
-        }, false, CACHE_MINUTES);
+
+            requestText(activeUrl, function (html) {
+                try {
+                    var doc = htmlToDoc(html);
+                    var parsed = parseFullCard(doc, activeCard || card, activeUrl);
+                    var result = {
+                        movie: parsed.movie
+                    };
+
+                    if (parsed.persons && (parsed.persons.cast.length || parsed.persons.crew.length)) {
+                        result.persons = parsed.persons;
+                    }
+
+                    var directStreams = extractDirectStreams(html);
+
+                    getSeasonsByCardUrl(activeUrl, function (seasons) {
+                        if (seasons.length) {
+                            var isTv = !!parsed.movie.original_name || seasons.length > 1;
+                            var last = seasons[seasons.length - 1];
+                            var episodesCount = 0;
+
+                            for (var i = 0; i < seasons.length; i++) episodesCount += seasons[i].episodes.length;
+
+                            parsed.movie.number_of_seasons = seasons.length;
+                            parsed.movie.number_of_episodes = episodesCount;
+
+                            if (isTv) {
+                                parsed.movie.name = parsed.movie.name || parsed.movie.title;
+                                parsed.movie.original_name = parsed.movie.original_name || parsed.movie.original_title || parsed.movie.title;
+
+                                result.episodes = {
+                                    name: last.name,
+                                    season_number: last.season_number,
+                                    seasons_count: seasons.length,
+                                    episodes: last.episodes
+                                };
+                            } else if (last.episodes.length) {
+                                parsed.movie.kinogo_stream = last.episodes[0].url || '';
+                                parsed.movie.kinogo_subtitles = last.episodes[0].subtitles || [];
+                            }
+                        } else if (directStreams.length) {
+                            parsed.movie.kinogo_stream = directStreams[0];
+                            parsed.movie.kinogo_streams = directStreams.map(function (url) {
+                                return {
+                                    quality: 'auto',
+                                    url: url
+                                };
+                            });
+                        }
+
+                        oncomplite(result);
+                    });
+                } catch (e) {
+                    log('full parse error', e.message);
+                    notifyError('KinoGO: ошибка парсинга карточки');
+                    if (onerror) onerror();
+                }
+            }, function (err) {
+                var status = toInt((err || {}).status, 0);
+
+                if (status === 404 && canRetryBySearch) {
+                    findKinogoCardByMovie(activeCard || card, function (foundCard) {
+                        var retryUrl = foundCard && foundCard.url ? absUrl(foundCard.url).replace(/#.*$/, '') : '';
+
+                        if (retryUrl && retryUrl !== activeUrl) {
+                            finalizeByUrl(foundCard, retryUrl, false);
+                            return;
+                        }
+
+                        openKinogoSearchFromMovie(activeCard || card || {});
+                    });
+                    return;
+                }
+
+                if (status === 404) {
+                    openKinogoSearchFromMovie(activeCard || card || {});
+                    return;
+                }
+
+                if (onerror) onerror();
+            }, false, CACHE_MINUTES);
+        }
+
+        finalizeByUrl(card, pageUrl, true);
     }
 
     function seasons(tv, from, oncomplite) {
