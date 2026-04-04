@@ -1050,29 +1050,34 @@
     }
 
     function addKinoSearchButton(place, card) {
-        if (!place || !place.length) return;
-        var _$ = window.$ || (window.jQuery) || null;
-        if (!_$) return;
-        if (place.find('.kinosearch-bridge-btn').length) return;
+        try {
+            if (!place || !place.length) return;
 
-        var btn = _$('<div class="full-start__button selector kinosearch-bridge-btn">KinoSearch</div>');
+            var container = place[0];
+            if (!container) return;
+            if (container.querySelector('.kinosearch-bridge-btn')) return;
 
-        btn.on('hover:enter click', function() {
-            if (!Lampa.Api || !Lampa.Api.sources || !Lampa.Api.sources[SOURCE_ID]) return;
-            Lampa.Api.sources[SOURCE_ID].full(
-                { card: card || {} },
-                function() {},
-                function(err) {
-                    if (Lampa.Noty) Lampa.Noty.show('KinoSearch: ' + ((err && err.text) || 'Nicht gefunden'));
-                }
-            );
-        });
+            var btn = document.createElement('div');
+            btn.className = 'full-start__button selector kinosearch-bridge-btn';
+            btn.innerHTML = 'KinoSearch';
+            btn.style.cssText = 'cursor:pointer;margin-top:4px;';
 
-        if (place.children && place.children('.full-start__button').length) {
-            place.children('.full-start__button').last().after(btn);
+            container.appendChild(btn);
+            console.log('[KinoSearch] button added to DOM');
+
+            btn.addEventListener('click', function() {
+                if (!Lampa.Api || !Lampa.Api.sources || !Lampa.Api.sources[SOURCE_ID]) return;
+                Lampa.Api.sources[SOURCE_ID].full(
+                    { card: card || {} },
+                    function() {},
+                    function(err) {
+                        if (Lampa.Noty) Lampa.Noty.show('KinoSearch: ' + ((err && err.text) || 'Nicht gefunden'));
+                    }
+                );
+            });
         }
-        else {
-            place.append(btn);
+        catch (e) {
+            console.log('[KinoSearch] addButton error:', e.message);
         }
     }
 
