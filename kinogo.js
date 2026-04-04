@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-22';
+    var PLUGIN_VERSION = '20260404-23';
     if (window.kinogo_source_plugin_version === PLUGIN_VERSION) return;
     window.kinogo_source_plugin_version = PLUGIN_VERSION;
 
@@ -2373,6 +2373,7 @@
                 Lampa.SettingsApi.addParam({
                     component: 'kinogo_proxy',
                     param: {
+                        name: 'kinogo_title_proxy',
                         type: 'title'
                     },
                     field: {
@@ -2397,6 +2398,7 @@
                 Lampa.SettingsApi.addParam({
                     component: 'kinogo_proxy',
                     param: {
+                        name: 'kinogo_reset_btn',
                         type: 'button'
                     },
                     field: {
