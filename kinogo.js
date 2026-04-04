@@ -1,13 +1,14 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-16';
+    var PLUGIN_VERSION = '20260404-19';
     if (window.kinogo_source_plugin_version === PLUGIN_VERSION) return;
     window.kinogo_source_plugin_version = PLUGIN_VERSION;
 
     var SOURCE_KEY = 'kinogo';
     var SOURCE_TITLE = 'KinoGO';
-    var BASE_URL = 'https://kinogo.li';
+    var BASE_URL = 'https://kinogo.ec';
+    var MIRROR_BASES = ['https://kinogo.mu', 'https://kinogo.luxury'];
     var CACHE_MINUTES = 45;
     var REQUEST_TIMEOUT = 25000;
 
@@ -123,6 +124,54 @@
         return BASE_URL + value;
     }
 
+    function knownBases() {
+        return [BASE_URL].concat(MIRROR_BASES);
+    }
+
+    function detectBase(url) {
+        var source = text(url || '');
+        if (!source) return '';
+
+        var bases = knownBases();
+        for (var i = 0; i < bases.length; i++) {
+            if (source.indexOf(bases[i]) === 0) return bases[i];
+        }
+        return '';
+    }
+
+    function fallbackTargets(url) {
+        var source = text(url || '');
+        var currentBase = detectBase(source);
+        if (!source || !currentBase) return [];
+
+        var path = source.slice(currentBase.length);
+        var out = [];
+        var bases = knownBases();
+
+        for (var i = 0; i < bases.length; i++) {
+            var base = bases[i];
+            if (base === currentBase) continue;
+            out.push(base + path);
+        }
+
+        return out;
+    }
+
+    function requestHeaders(url) {
+        var headers = {
+            'Accept-Language': 'ru-RU,ru;q=0.9',
+            'Referer': BASE_URL + '/',
+            'Origin': BASE_URL
+        };
+        var base = detectBase(url);
+        if (base) {
+            headers.Referer = base + '/';
+            headers.Origin = base;
+        }
+
+        return headers;
+    }
+
     function normalizeQuery(query) {
         var value = text(query);
 
@@ -212,8 +261,8 @@
         if (requestOptions && typeof requestOptions === 'object') options = requestOptions;
 
         var directTarget = absUrl(url);
-        var target = directTarget;
-        var usedProxy = false;
+        var target = proxiedUrl(directTarget);
+        var usedProxy = target !== directTarget;
         var cacheKey = 'TEXT::' + target + '::' + JSON.stringify(postData || {});
         var cached = cacheGet(cacheKey);
 
@@ -228,15 +277,67 @@
             onSuccess(html);
         }
 
+        function runRequest(runUrl, runCacheKey, callbackSuccess, callbackError) {
+            req.silent(runUrl, function (data) {
+                doneSuccess(data, runCacheKey);
+                if (callbackSuccess) callbackSuccess();
+            }, callbackError, postData || false, {
+                dataType: 'text',
+                cache: {
+                    life: ttl
+                },
+                headers: requestHeaders(runUrl)
+            });
+        }
+
         function handleError(a, b) {
             var decoded = '';
             var status = toInt((a || {}).status, 0);
             var message = '';
+            var mirrors = fallbackTargets(target);
 
             try {
                 decoded = req.errorDecode(a, b);
             } catch (e) {
                 decoded = '';
+            }
+
+            if ((status === 403 || status === 503 || status === 404) && mirrors.length) {
+                var mi = 0;
+
+                function tryMirror() {
+                    if (mi >= mirrors.length) {
+                        if (status === 403 || /forbidden/i.test(decoded || '')) {
+                            message = 'Доступ к KinoGO запрещён (403).';
+                        } else if (status === 404) {
+                            message = 'Страница KinoGO не найдена (404).';
+                        } else {
+                            message = decoded ? stripTags(decoded).slice(0, 180) : 'Ошибка сети';
+                        }
+
+                        if (!options.suppressNoty && !(options.suppress404 && status === 404)) {
+                            notifyError('KinoGO: ' + message);
+                        }
+                        if (onError) onError({ status: status, responseText: message }, b);
+                        return;
+                    }
+
+                    var mirrorTarget = mirrors[mi++];
+                    var mirrorCacheKey = 'TEXT::' + mirrorTarget + '::' + JSON.stringify(postData || {});
+                    var mirrorCached = cacheGet(mirrorCacheKey);
+
+                    if (mirrorCached !== null) {
+                        onSuccess(mirrorCached);
+                        return;
+                    }
+
+                    runRequest(mirrorTarget, mirrorCacheKey, null, function () {
+                        tryMirror();
+                    });
+                }
+
+                tryMirror();
+                return;
             }
 
             if (status === 404 && usedProxy) {
@@ -296,14 +397,7 @@
             if (onError) onError({ status: status, responseText: message }, b);
         }
 
-        req.silent(target, function (data) {
-            doneSuccess(data, cacheKey);
-        }, handleError, postData || false, {
-            dataType: 'text',
-            cache: {
-                life: ttl
-            }
-        });
+        runRequest(target, cacheKey, null, handleError);
     }
 
     function readNodeValueAfterLabel(labelNode) {
@@ -936,7 +1030,7 @@
         var directKeys = ['hls', 'mp4', 'dash', 'dasha'];
         for (var i = 0; i < directKeys.length; i++) {
             var key = directKeys[i];
-            var match = sourceObject.match(new RegExp('(?:^|[,{]\\\\s*)' + key + '\\\\s*:\\\\s*"([^"]+)"', 'i'));
+            var match = sourceObject.match(new RegExp('(?:^|[,{\\s])' + key + '\\s*:\\s*"([^"]+)"', 'i'));
             if (match && match[1]) {
                 var value = decodeEscapedUrl(match[1]);
                 if (value) out.streams.push(value);
@@ -1147,27 +1241,63 @@
     function firstEmbedCandidates(doc) {
         var list = [];
         var seen = {};
-        var tabs = doc.querySelectorAll('.tabs li[data-iframe]');
 
-        for (var i = 0; i < tabs.length; i++) {
-            var raw = text(tabs[i].getAttribute('data-iframe'));
-            if (!raw) continue;
-            var url = absUrl(raw);
-            if (!url || seen[url]) continue;
+        function pushRaw(raw) {
+            var value = text(raw || '');
+            if (!value) return;
+            if (/^javascript:/i.test(value)) return;
+            if (/\/trailer-cdn\//i.test(value)) return;
+
+            var url = absUrl(value);
+            if (!/^https?:\/\//i.test(url)) return;
+            if (seen[url]) return;
+
             seen[url] = true;
             list.push(url);
         }
 
-        var embedMeta = doc.querySelector('[itemprop="embedUrl"]');
-        if (embedMeta) {
-            var embed = absUrl(embedMeta.getAttribute('href') || embedMeta.getAttribute('content') || '');
-            if (embed && !seen[embed]) list.push(embed);
+        function collectBySelector(selector, attrs) {
+            var nodes = doc.querySelectorAll(selector);
+            for (var i = 0; i < nodes.length; i++) {
+                for (var j = 0; j < attrs.length; j++) {
+                    pushRaw(nodes[i].getAttribute(attrs[j]));
+                }
+            }
+        }
+
+        collectBySelector('.tabs li[data-iframe], .tabs [data-iframe]', ['data-iframe']);
+        collectBySelector('[data-iframe]', ['data-iframe']);
+        collectBySelector('[itemprop="embedUrl"]', ['href', 'content']);
+        collectBySelector('iframe[src], iframe[data-src]', ['src', 'data-src']);
+        collectBySelector('[data-src*="embed"], [data-src*="iframe"]', ['data-src']);
+        collectBySelector('[data-player], [data-player-url]', ['data-player', 'data-player-url']);
+        collectBySelector('link[itemprop="embedUrl"], meta[itemprop="embedUrl"]', ['href', 'content']);
+
+        var scripts = doc.querySelectorAll('script');
+        var embedRegex = /https?:\/\/[^"'\\\s<>]+(?:\/embed\/[^"'\\\s<>]+|\/iframe(?:\?[^"'\\\s<>]*)?)/ig;
+        for (var n = 0; n < scripts.length; n++) {
+            var scriptText = scripts[n].textContent || '';
+            var match;
+            while ((match = embedRegex.exec(scriptText)) !== null) {
+                pushRaw(match[0]);
+            }
+        }
+
+        function embedPriority(url) {
+            var u = (url || '').toLowerCase();
+            if (u.indexOf('api.variyt.ws/embed/') >= 0) return 0;
+            if (u.indexOf('/embed/movie/') >= 0 || u.indexOf('/embed/tv/') >= 0) return 1;
+            if (u.indexOf('stloadi.live') >= 0) return 2;
+            if (u.indexOf('cinemap.cc') >= 0 || u.indexOf('cinemar.cc') >= 0) return 3;
+            if (u.indexOf('/iframe') >= 0) return 4;
+            return 9;
         }
 
         list.sort(function (a, b) {
-            var ai = a.indexOf('api.variyt.ws/embed/') >= 0 ? 0 : 1;
-            var bi = b.indexOf('api.variyt.ws/embed/') >= 0 ? 0 : 1;
-            return ai - bi;
+            var pa = embedPriority(a);
+            var pb = embedPriority(b);
+            if (pa !== pb) return pa - pb;
+            return a.localeCompare(b);
         });
 
         return list;
@@ -1781,15 +1911,7 @@
             notifyError('KinoGO: пустой запрос поиска');
             return;
         }
-
-        Lampa.Activity.push({
-            url: '',
-            title: 'KinoGO: ' + query,
-            component: 'category_full',
-            page: 1,
-            query: encodeURIComponent(query),
-            source: SOURCE_KEY
-        });
+        notifyError('KinoGO: не удалось найти соответствие для "' + query + '"');
     }
 
     function findKinogoCardByMovie(movie, onDone) {
@@ -1928,7 +2050,7 @@
 
         findKinogoCardByMovie(movie, function (card) {
             if (!card) {
-                openKinogoSearchFromMovie(movie);
+                notifyError('KinoGO: не удалось найти фильм на источнике');
                 return;
             }
 
@@ -2199,6 +2321,67 @@
         } catch (e) {}
     }
 
+    function registerProxySettings() {
+        try {
+            if (!window.Lampa || !Lampa.Params || !Lampa.SettingsApi) return;
+            if (window.__kinogo_proxy_settings_registered) return;
+
+            Lampa.Params.select('kinogo_proxy', '', '');
+
+            if (typeof Lampa.SettingsApi.addComponent === 'function') {
+                Lampa.SettingsApi.addComponent({
+                    component: 'kinogo_proxy',
+                    icon: '<svg height="36" viewBox="0 0 42 46" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 2C15.201 2 10.5 6.701 10.5 12.5V20H7a5 5 0 0 0-5 5v14a5 5 0 0 0 5 5h28a5 5 0 0 0 5-5V25a5 5 0 0 0-5-5h-3.5v-7.5C31.5 6.701 26.799 2 21 2Zm-6.5 10.5a6.5 6.5 0 1 1 13 0V20h-13v-7.5Z" stroke="white" stroke-width="3"/></svg>',
+                    name: 'KinoGO'
+                });
+            }
+
+            if (typeof Lampa.SettingsApi.addParam === 'function') {
+                Lampa.SettingsApi.addParam({
+                    component: 'kinogo_proxy',
+                    param: {
+                        type: 'title'
+                    },
+                    field: {
+                        name: 'Прокси'
+                    }
+                });
+
+                Lampa.SettingsApi.addParam({
+                    component: 'kinogo_proxy',
+                    param: {
+                        name: 'kinogo_proxy',
+                        type: 'input',
+                        default: '',
+                        placeholder: 'https://cors.eu.org/{url}'
+                    },
+                    field: {
+                        name: 'CORS proxy URL',
+                        description: 'Пример: https://cors.eu.org/{url} или https://api.codetabs.com/v1/proxy?quest={url}'
+                    }
+                });
+
+                Lampa.SettingsApi.addParam({
+                    component: 'kinogo_proxy',
+                    param: {
+                        type: 'button'
+                    },
+                    field: {
+                        name: 'Сбросить прокси'
+                    },
+                    onChange: function () {
+                        Lampa.Storage.set('kinogo_proxy', '');
+                        Lampa.Noty.show('KinoGO: прокси очищен');
+                    }
+                });
+            }
+
+            window.__kinogo_proxy_settings_registered = true;
+        } catch (e) {
+            log('proxy settings error', e.message);
+        }
+    }
+
     function register() {
         if (!Lampa || !Lampa.Api || !Lampa.Api.sources) return;
 
@@ -2220,6 +2403,7 @@
         try {
             ensureMainSourceNotKinogo();
             hideKinogoInSourceSettings();
+            registerProxySettings();
             register();
             bindCardBridge();
         } catch (e) {
