@@ -1075,20 +1075,26 @@
 
     function ensureBridgeInActiveFull() {
         try {
-            if (document.querySelector('.kinosearch-bridge-btn')) return;
+            if (!window.Lampa || !Lampa.Activity || !Lampa.Activity.active) return;
+            var active = Lampa.Activity.active();
+            if (!active || active.component !== 'full') return;
+            if (!active.activity || !active.activity.render) return;
 
-            var btn = document.createElement('div');
-            btn.className = 'kinosearch-bridge-btn';
-            btn.innerHTML = 'KinoSearch';
-            btn.style.cssText = 'position:fixed;bottom:80px;right:20px;z-index:99999;background:rgba(0,120,255,0.9);color:white;padding:12px 20px;border-radius:8px;font-size:20px;cursor:pointer;';
-            document.body.appendChild(btn);
-            console.log('[KinoSearch] floating button added');
+            var root = active.activity.render();
+            if (!root || !root.length) return;
 
-            btn.addEventListener('click', function() {
-                btn.remove();
-                if (!Lampa.Activity || !Lampa.Activity.active) return;
-                var active = Lampa.Activity.active();
-                var card = active && (active.card || (active.activity && active.activity.card)) || {};
+            if (root.find('.kinosearch-bridge-btn').length) return;
+
+            var card = active.card || (active.activity && active.activity.card) || {};
+
+            var $ = window.Lampa && Lampa.$ ? Lampa.$ : window.$;
+            if (!$) return;
+
+            var btn = $('<div>')
+                .addClass('full-start__button selector kinosearch-bridge-btn')
+                .text('KinoSearch');
+
+            btn.on('hover:enter click', function() {
                 if (!Lampa.Api || !Lampa.Api.sources || !Lampa.Api.sources[SOURCE_ID]) return;
                 Lampa.Api.sources[SOURCE_ID].full(
                     { card: card },
@@ -1098,6 +1104,17 @@
                     }
                 );
             });
+
+            var place = root.find('.view--torrent');
+            if (!place.length) place = root.find('.full-start-new');
+            if (!place.length) place = root.find('.full-start');
+            if (place.length) {
+                var lastBtn = place.find('.full-start__button').last();
+                if (lastBtn.length) lastBtn.after(btn);
+                else place.append(btn);
+            }
+
+            console.log('[KinoSearch] button injected via Lampa.$');
         }
         catch (e) {
             console.log('[KinoSearch] error:', e.message);
