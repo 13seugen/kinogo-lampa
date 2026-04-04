@@ -1112,7 +1112,12 @@
                 notifyError('KinoGO: ошибка парсинга карточки');
                 if (onerror) onerror();
             }
-        }, function () {
+        }, function (err) {
+            var status = toInt((err || {}).status, 0);
+            if (status === 404) {
+                openKinogoSearchFromMovie(card);
+                return;
+            }
             if (onerror) onerror();
         }, false, CACHE_MINUTES);
     }
