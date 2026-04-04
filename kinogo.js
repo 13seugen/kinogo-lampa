@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-27';
+    var PLUGIN_VERSION = '20260404-28';
     if (window.kinogo_source_plugin_version === PLUGIN_VERSION) return;
     window.kinogo_source_plugin_version = PLUGIN_VERSION;
 
@@ -1565,8 +1565,16 @@
     }
 
     function full(params, oncomplite, onerror) {
+        log('full() called, params:', JSON.stringify({
+            id: (params.card || {}).id,
+            title: (params.card || {}).title || (params.card || {}).name,
+            url: (params.card || {}).url,
+            source: (params.card || {}).source
+        }));
+
         var card = params.card || {};
         var pageUrl = absUrl(card.url || params.url || cardUrlById[params.id] || '').replace(/#.*$/, '');
+        log('full() pageUrl:', pageUrl);
 
         function finalizeByUrl(activeCard, activeUrl, canRetryBySearch) {
             if (!activeUrl) {
@@ -1950,6 +1958,8 @@
     }
 
     function findKinogoCardByMovie(movie, onDone) {
+        log('findKinogoCardByMovie:', (movie || {}).title || (movie || {}).name);
+
         var variants = movieTitleVariants(movie);
         var titleNorms = [];
         var year = extractMovieYear(movie);
