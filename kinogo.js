@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-20';
+    var PLUGIN_VERSION = '20260404-21';
     if (window.kinogo_source_plugin_version === PLUGIN_VERSION) return;
     window.kinogo_source_plugin_version = PLUGIN_VERSION;
 
@@ -637,7 +637,48 @@
         return buildCardFromParts(url, title, poster, year, genres, description, node ? node.textContent : '');
     }
 
-    function parseCardsFromDoc(doc) {
+    function collectCardNodes(doc, searchOnly) {
+        var selectors = searchOnly
+            ? [
+                '#dle-content .shortstory', '.shortstory',
+                '#dle-content .short-story', '.short-story',
+                '#dle-content .short_story', '.short_story',
+                '#dle-content .movie', '.movie',
+                '#dle-content .movie-item', '.movie-item',
+                '#dle-content article', '#dle-content .item'
+            ]
+            : [
+                '.shortstory',
+                '.short-story',
+                '.short_story',
+                '.movie',
+                '.movie-item',
+                '#dle-content article',
+                '#dle-content .item'
+            ];
+
+        var merged = [];
+        var seen = {};
+
+        for (var i = 0; i < selectors.length; i++) {
+            var nodes = doc.querySelectorAll(selectors[i]);
+            for (var j = 0; j < nodes.length; j++) {
+                var node = nodes[j];
+                if (!node || !node.querySelector) continue;
+                var link = node.querySelector('a[href*=".html"]');
+                if (!link) continue;
+                var key = link.getAttribute('href') || ('idx_' + i + '_' + j);
+                if (seen[key]) continue;
+                seen[key] = true;
+                merged.push(node);
+            }
+            if (merged.length >= 3) break;
+        }
+
+        return merged;
+    }
+
+    function parseCardsByNodesOrAnchors(doc, nodes) {
         var cards = [];
         var uniq = {};
         var i;
@@ -649,14 +690,13 @@
             cards.push(card);
         }
 
-        var nodes = doc.querySelectorAll('.shortstory');
-        for (i = 0; i < nodes.length; i++) {
-            push(parseCardFromShortstory(nodes[i]));
+        var list = Array.isArray(nodes) ? nodes : [];
+        for (i = 0; i < list.length; i++) {
+            push(parseCardFromShortstory(list[i]));
         }
 
         if (cards.length === 0) {
             var anchors = doc.querySelectorAll('a[href*=".html"], a[href*="/serial"], a[href*="/movie"]');
-
             for (i = 0; i < anchors.length; i++) {
                 push(parseCardFromAnchor(anchors[i]));
             }
@@ -665,23 +705,14 @@
         return cards;
     }
 
+    function parseCardsFromDoc(doc) {
+        var nodes = collectCardNodes(doc, false);
+        return parseCardsByNodesOrAnchors(doc, nodes);
+    }
+
     function parseSearchCardsFromDoc(doc) {
-        var cards = [];
-        var uniq = {};
-        var nodes = doc.querySelectorAll('#dle-content .shortstory, .shortstory');
-
-        function push(card) {
-            if (!card || !card.url) return;
-            if (uniq[card.url]) return;
-            uniq[card.url] = true;
-            cards.push(card);
-        }
-
-        for (var i = 0; i < nodes.length; i++) {
-            push(parseCardFromShortstory(nodes[i]));
-        }
-
-        return cards;
+        var nodes = collectCardNodes(doc, true);
+        return parseCardsByNodesOrAnchors(doc, nodes);
     }
 
     function parseSerialUpdatesFromDoc(doc) {
@@ -773,14 +804,17 @@
         };
     }
 
-    function buildSearchUrlFallback(query, page) {
+    function buildSearchRequestUtf8(query, page) {
         var encoded = encodeURIComponent(query || '');
-        var url = BASE_URL + '/xfsearch/' + encoded + '/';
         var p = Math.max(1, toInt(page, 1));
+        var body = 'subaction=search&story=' + encoded;
 
-        if (p > 1) url = appendPage(url, p);
+        if (p > 1) body += '&search_start=' + p;
 
-        return url;
+        return {
+            url: BASE_URL + '/index.php?do=search',
+            postData: body
+        };
     }
 
     function normalizeSitePath(url) {
@@ -845,12 +879,12 @@
                 var results = query ? parseSearchCardsFromDoc(doc) : parseCardsFromDoc(doc);
 
                 if (query && !results.length) {
-                    var fallbackUrl = buildSearchUrlFallback(query, page);
+                    var fallbackSearch = buildSearchRequestUtf8(query, page);
 
-                    requestText(fallbackUrl, function (fallbackHtml) {
+                    requestText(fallbackSearch.url, function (fallbackHtml) {
                         try {
                             var fallbackDoc = htmlToDoc(fallbackHtml);
-                            var fallbackResults = parseCardsFromDoc(fallbackDoc);
+                            var fallbackResults = parseSearchCardsFromDoc(fallbackDoc);
 
                             if (!fallbackResults.length) {
                                 if (onError) onError();
@@ -871,7 +905,7 @@
                         }
                     }, function () {
                         if (onError) onError();
-                    }, false, CACHE_MINUTES, {
+                    }, fallbackSearch.postData, CACHE_MINUTES, {
                         suppress404: true,
                         suppressNoty: true
                     });
