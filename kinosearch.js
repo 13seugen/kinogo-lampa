@@ -135,6 +135,8 @@
     ];
 
     var serialCache = {};
+    var cardBridgeBound = false;
+    var cardBridgeTimer = null;
 
     function log(msg) {
         try {
@@ -1047,52 +1049,81 @@
         attachDiscoverySource();
     }
 
+    function addKinoSearchButton(place, card) {
+        if (!place || !place.length || !window.$) return;
+        if (place.find('.kinosearch-bridge-btn').length) return;
+
+        var btn = $('<div class="full-start__button selector kinosearch-bridge-btn">KinoSearch</div>');
+
+        btn.on('hover:enter click', function() {
+            if (!Lampa.Api || !Lampa.Api.sources || !Lampa.Api.sources[SOURCE_ID]) return;
+            Lampa.Api.sources[SOURCE_ID].full(
+                { card: card || {} },
+                function() {},
+                function(err) {
+                    if (Lampa.Noty) Lampa.Noty.show('KinoSearch: ' + ((err && err.text) || 'Nicht gefunden'));
+                }
+            );
+        });
+
+        if (place.children && place.children('.full-start__button').length) {
+            place.children('.full-start__button').last().after(btn);
+        }
+        else {
+            place.append(btn);
+        }
+    }
+
+    function ensureBridgeInActiveFull() {
+        try {
+            if (!Lampa.Activity || !Lampa.Activity.active) return;
+            var active = Lampa.Activity.active();
+            if (!active || active.component !== 'full' || !active.activity || !active.activity.render) return;
+            var root = active.activity.render();
+            if (!root || !root.length) return;
+            var place = root.find('.view--torrent');
+            if (!place.length) place = root.find('.full-start');
+            if (!place.length) place = root.find('.full-start-new');
+            if (!place.length) place = root;
+            var card = active.card || (active.activity && active.activity.card) || {};
+            addKinoSearchButton(place, card);
+        }
+        catch (e) {}
+    }
+
     function bindCardBridge() {
-        setInterval(function() {
+        if (cardBridgeBound) return;
+        if (!window.Lampa || !Lampa.Listener) return;
+        cardBridgeBound = true;
+
+        Lampa.Listener.follow('full', function(e) {
             try {
-                if (!window.Lampa || !Lampa.Activity || !Lampa.Activity.active) return;
-                var active = Lampa.Activity.active();
-                if (!active || active.component !== 'full') return;
-                if (!active.activity || typeof active.activity.render !== 'function') return;
-
-                var root = active.activity.render();
-                if (!root || typeof root.find !== 'function') return;
-
-                if (root.find('[data-kinosearch]').length) return;
-
+                if (!e || e.type !== 'complite' || !e.data || !e.data.movie) return;
+                var act = e.object && e.object.activity;
+                if (!act || !act.render) return;
+                var root = act.render();
                 var place = root.find('.view--torrent');
-                if (!place.length) place = root.find('.full-start-new');
                 if (!place.length) place = root.find('.full-start');
-                if (!place.length) return;
-
-                var card = active.card || (active.activity && active.activity.card) || {};
-
-                var btn = $('<div class="full-start__button selector" style="margin-top:0.5em" data-kinosearch="1">'
-                    + '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle;margin-right:6px">'
-                    + '<circle cx="12" cy="12" r="10" stroke="white" stroke-width="2"/>'
-                    + '<polygon points="10,8 16,12 10,16" fill="white"/>'
-                    + '</svg>'
-                    + '<span>KinoSearch</span>'
-                    + '</div>');
-
-                place.append(btn);
-                console.log('[KinoSearch] button injected');
-
-                btn.on('hover:enter click', function() {
-                    if (!Lampa.Api || !Lampa.Api.sources || !Lampa.Api.sources[SOURCE_ID]) return;
-                    Lampa.Api.sources[SOURCE_ID].full(
-                        { card: card },
-                        function() {},
-                        function(err) {
-                            if (Lampa.Noty) Lampa.Noty.show('KinoSearch: ' + ((err && err.text) || 'Nicht gefunden'));
-                        }
-                    );
-                });
+                if (!place.length) place = root;
+                addKinoSearchButton(place, e.data.movie);
             }
-            catch (e) {
-                console.log('[KinoSearch] bridge error:', e.message);
+            catch (e) {}
+        });
+
+        try {
+            var active = Lampa.Activity && Lampa.Activity.active ? Lampa.Activity.active() : null;
+            if (active && active.component === 'full' && active.activity && active.activity.render) {
+                var place = active.activity.render().find('.view--torrent');
+                if (!place.length) place = active.activity.render().find('.full-start');
+                if (!place.length) place = active.activity.render();
+                addKinoSearchButton(place, active.card || {});
             }
-        }, 1500);
+        }
+        catch (e) {}
+
+        if (!cardBridgeTimer) {
+            cardBridgeTimer = setInterval(ensureBridgeInActiveFull, 1500);
+        }
     }
 
     function startPlugin() {
