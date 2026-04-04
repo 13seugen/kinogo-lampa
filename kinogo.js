@@ -1688,7 +1688,17 @@
         if (!Lampa || !Lampa.Api || !Lampa.Api.sources) return;
         if (Lampa.Api.sources[SOURCE_KEY]) return;
 
-        Lampa.Api.sources[SOURCE_KEY] = sourceApi;
+        try {
+            Object.defineProperty(Lampa.Api.sources, SOURCE_KEY, {
+                value: sourceApi,
+                configurable: true,
+                writable: true,
+                enumerable: false
+            });
+        } catch (e) {
+            Lampa.Api.sources[SOURCE_KEY] = sourceApi;
+        }
+
         log('source registered');
     }
 
