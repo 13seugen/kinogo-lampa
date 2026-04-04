@@ -492,9 +492,17 @@
             if (root.find('.kinogo-btn').length) return;
 
             var place = root.find('.view--torrent');
+            if (!place.length) place = root.find('.view--online');
+            if (!place.length) place = root.find('.view--online-head');
             if (!place.length) place = root.find('.full-start-new');
             if (!place.length) place = root.find('.full-start');
+            if (!place.length) {
+                // Последний вариант — любой блок с кнопками источников.
+                place = root.find('.source--inner, .online--inner, .source-inner');
+            }
             if (!place.length) return;
+
+            log('place found:', place.length, place[0] && place[0].className);
 
             var container = place[0];
             if (!container) return;
