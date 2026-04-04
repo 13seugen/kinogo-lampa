@@ -583,10 +583,10 @@
 
     function buildSearchUrl(query, page) {
         var encoded = encodeCP1251URIComponent(query || '');
-        var url = BASE_URL + '/xfsearch/' + encoded + '/';
+        var url = BASE_URL + '/index.php?do=search&subaction=search&story=' + encoded;
         var p = Math.max(1, toInt(page, 1));
 
-        if (p > 1) url += 'page/' + p + '/';
+        if (p > 1) url += '&search_start=' + p;
 
         return url;
     }
@@ -1656,6 +1656,34 @@
         } catch (e) {}
     }
 
+    function hideKinogoInSourceSettings() {
+        try {
+            if (!window.Lampa || !Lampa.Params || typeof Lampa.Params.select !== 'function') return;
+            if (Lampa.Params.select.__kinogo_hide_wrapped) return;
+
+            var originalSelect = Lampa.Params.select;
+
+            Lampa.Params.select = function (name, values, current) {
+                if (name === 'source' && values && typeof values === 'object') {
+                    var clean = {};
+
+                    for (var key in values) {
+                        if (!Object.prototype.hasOwnProperty.call(values, key)) continue;
+                        if (key === SOURCE_KEY) continue;
+                        clean[key] = values[key];
+                    }
+
+                    values = clean;
+                    if (current === SOURCE_KEY) current = 'tmdb';
+                }
+
+                return originalSelect.call(this, name, values, current);
+            };
+
+            Lampa.Params.select.__kinogo_hide_wrapped = true;
+        } catch (e) {}
+    }
+
     function register() {
         if (!Lampa || !Lampa.Api || !Lampa.Api.sources) return;
         if (Lampa.Api.sources[SOURCE_KEY]) return;
@@ -1667,6 +1695,7 @@
     function start() {
         try {
             ensureMainSourceNotKinogo();
+            hideKinogoInSourceSettings();
             register();
             bindCardBridge();
         } catch (e) {
