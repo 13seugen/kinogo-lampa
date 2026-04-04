@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-8';
+    var PLUGIN_VERSION = '20260404-12';
     if (window.kinogo_source_plugin_version === PLUGIN_VERSION) return;
     window.kinogo_source_plugin_version = PLUGIN_VERSION;
 
@@ -19,6 +19,7 @@
     var memoryCache = {};
     var cardUrlById = {};
     var seasonsByUrl = {};
+    var embedMediaByUrl = {};
     var lastNotyAt = 0;
     var bridgeOpenAt = 0;
     var bridgeOpenBusy = false;
@@ -812,6 +813,224 @@
         }
     }
 
+    function decodeEscapedUrl(url) {
+        var value = text(url || '');
+        if (!value) return '';
+
+        value = value.replace(/\\\//g, '/').replace(/\\u0026/gi, '&');
+        return absUrl(value);
+    }
+
+    function uniqueSubtitleList(subtitles) {
+        var list = Array.isArray(subtitles) ? subtitles : [];
+        var out = [];
+        var seen = {};
+
+        for (var i = 0; i < list.length; i++) {
+            var item = list[i] || {};
+            var url = absUrl(item.url || '');
+            var name = text(item.name || item.label || '');
+            if (!url || seen[url]) continue;
+            seen[url] = true;
+            out.push({
+                url: url,
+                name: name || ('Субтитры ' + (out.length + 1))
+            });
+        }
+
+        return out;
+    }
+
+    function pickBestStream(streams) {
+        var list = unique((streams || []).map(function (url) {
+            return absUrl(url || '');
+        }).filter(function (url) {
+            return !!url;
+        }));
+
+        if (!list.length) return '';
+
+        for (var i = 0; i < list.length; i++) {
+            if (/\.m3u8(?:\?|$)/i.test(list[i])) return list[i];
+        }
+
+        for (var j = 0; j < list.length; j++) {
+            if (/\.mp4(?:\?|$)/i.test(list[j])) return list[j];
+        }
+
+        return list[0];
+    }
+
+    function parseEmbedSourceObject(embedHtml) {
+        var html = embedHtml || '';
+        var out = {
+            streams: [],
+            subtitles: []
+        };
+
+        var sourceMarker = html.indexOf('source:');
+        if (sourceMarker < 0) sourceMarker = html.indexOf('"source"');
+        if (sourceMarker < 0) return out;
+
+        var objectStart = html.indexOf('{', sourceMarker);
+        if (objectStart < 0) return out;
+
+        var sourceObject = extractBalanced(html, objectStart, '{', '}');
+        if (!sourceObject) return out;
+
+        var directKeys = ['hls', 'mp4', 'dash', 'dasha'];
+        for (var i = 0; i < directKeys.length; i++) {
+            var key = directKeys[i];
+            var match = sourceObject.match(new RegExp('(?:^|[,{]\\\\s*)' + key + '\\\\s*:\\\\s*"([^"]+)"', 'i'));
+            if (match && match[1]) {
+                var value = decodeEscapedUrl(match[1]);
+                if (value) out.streams.push(value);
+            }
+        }
+
+        var ccMarker = sourceObject.search(/(?:^|[,{]\s*)cc\s*:\s*\[/i);
+        if (ccMarker >= 0) {
+            var ccStart = sourceObject.indexOf('[', ccMarker);
+            if (ccStart >= 0) {
+                var ccArrayText = extractBalanced(sourceObject, ccStart, '[', ']');
+                if (ccArrayText) {
+                    try {
+                        var parsed = JSON.parse(ccArrayText);
+                        out.subtitles = uniqueSubtitleList(parsed.map(function (item) {
+                            return {
+                                url: decodeEscapedUrl(item.url || ''),
+                                name: text(item.name || '')
+                            };
+                        }));
+                    } catch (e) {
+                        out.subtitles = [];
+                    }
+                }
+            }
+        }
+
+        out.streams = unique(out.streams);
+        return out;
+    }
+
+    function parseEmbedMedia(embedHtml) {
+        var rawSeasons = parseSeasonsFromEmbed(embedHtml || '');
+        var mappedSeasons = rawSeasons.length ? mapSeasons(rawSeasons) : [];
+        var sourceData = parseEmbedSourceObject(embedHtml || '');
+        var directStreams = extractDirectStreams(embedHtml || '');
+
+        return {
+            seasons: mappedSeasons,
+            streams: unique([].concat(sourceData.streams || [], directStreams || [])),
+            subtitles: uniqueSubtitleList(sourceData.subtitles || [])
+        };
+    }
+
+    function getEmbedMediaByCardUrl(cardUrl, callback) {
+        var url = absUrl(cardUrl || '');
+        if (!url) {
+            callback({
+                seasons: [],
+                streams: [],
+                subtitles: []
+            });
+            return;
+        }
+
+        if (embedMediaByUrl[url]) {
+            callback(embedMediaByUrl[url]);
+            return;
+        }
+
+        requestText(url, function (html) {
+            var doc = htmlToDoc(html);
+            var embeds = firstEmbedCandidates(doc);
+
+            if (!embeds.length) {
+                var empty = {
+                    seasons: [],
+                    streams: [],
+                    subtitles: []
+                };
+                embedMediaByUrl[url] = empty;
+                seasonsByUrl[url] = [];
+                callback(empty);
+                return;
+            }
+
+            var index = 0;
+            var merged = {
+                seasons: [],
+                streams: [],
+                subtitles: []
+            };
+
+            function mergeSubtitles(current, incoming) {
+                return uniqueSubtitleList([].concat(current || [], incoming || []));
+            }
+
+            function done() {
+                merged.streams = unique((merged.streams || []).map(function (item) {
+                    return absUrl(item || '');
+                }).filter(function (item) {
+                    return !!item;
+                }));
+
+                embedMediaByUrl[url] = merged;
+                seasonsByUrl[url] = merged.seasons || [];
+                callback(merged);
+            }
+
+            function tryNext() {
+                if (index >= embeds.length) {
+                    done();
+                    return;
+                }
+
+                var embedUrl = embeds[index++];
+
+                requestText(embedUrl, function (embedHtml) {
+                    var parsed = parseEmbedMedia(embedHtml || '');
+
+                    if (parsed.seasons.length && !merged.seasons.length) {
+                        merged.seasons = parsed.seasons;
+                    }
+
+                    if (parsed.streams.length) {
+                        merged.streams = unique([].concat(merged.streams || [], parsed.streams));
+                    }
+
+                    if (parsed.subtitles.length) {
+                        merged.subtitles = mergeSubtitles(merged.subtitles, parsed.subtitles);
+                    }
+
+                    if (merged.seasons.length && merged.streams.length) {
+                        done();
+                        return;
+                    }
+
+                    tryNext();
+                }, function () {
+                    tryNext();
+                }, false, 20, {
+                    suppress404: true,
+                    suppressNoty: true
+                });
+            }
+
+            tryNext();
+        }, function () {
+            callback({
+                seasons: [],
+                streams: [],
+                subtitles: []
+            });
+        }, false, CACHE_MINUTES, {
+            suppress404: true,
+            suppressNoty: true
+        });
+    }
+
     function mapEpisode(ep, seasonNumber, index) {
         var episodeNumber = toInt(ep.episode, index + 1);
         var subtitles = Array.isArray(ep.cc) ? ep.cc : [];
@@ -1040,59 +1259,8 @@
     }
 
     function getSeasonsByCardUrl(cardUrl, callback) {
-        var url = absUrl(cardUrl || '');
-        if (!url) {
-            callback([]);
-            return;
-        }
-
-        if (seasonsByUrl[url]) {
-            callback(seasonsByUrl[url]);
-            return;
-        }
-
-        requestText(url, function (html) {
-            var doc = htmlToDoc(html);
-            var embeds = firstEmbedCandidates(doc);
-
-            if (!embeds.length) {
-                seasonsByUrl[url] = [];
-                callback([]);
-                return;
-            }
-
-            var index = 0;
-
-            function tryNext() {
-                if (index >= embeds.length) {
-                    seasonsByUrl[url] = [];
-                    callback([]);
-                    return;
-                }
-
-                var embedUrl = embeds[index++];
-
-                requestText(embedUrl, function (embedHtml) {
-                    var rawSeasons = parseSeasonsFromEmbed(embedHtml);
-                    if (!rawSeasons.length) return tryNext();
-
-                    var mapped = mapSeasons(rawSeasons);
-                    seasonsByUrl[url] = mapped;
-                    callback(mapped);
-                }, function () {
-                    tryNext();
-                }, false, 20, {
-                    suppress404: true,
-                    suppressNoty: true
-                });
-            }
-
-            tryNext();
-        }, function () {
-            callback([]);
-        }, false, CACHE_MINUTES, {
-            suppress404: true,
-            suppressNoty: true
+        getEmbedMediaByCardUrl(cardUrl, function (media) {
+            callback((media && media.seasons) ? media.seasons : []);
         });
     }
 
@@ -1191,7 +1359,13 @@
             requestText(activeUrl, function (html) {
                 try {
                     var doc = htmlToDoc(html);
-                    var parsed = parseFullCard(doc, activeCard || card, activeUrl);
+                    var keepLampaMeta = !!(activeCard && activeCard.keep_lampa_meta);
+                    var parsed = keepLampaMeta
+                        ? {
+                            movie: buildSafeMovieFromCard(activeCard || card, activeUrl),
+                            persons: { cast: [], crew: [] }
+                        }
+                        : parseFullCard(doc, activeCard || card, activeUrl);
                     var result = {
                         movie: parsed.movie
                     };
@@ -1202,7 +1376,11 @@
 
                     var directStreams = extractDirectStreams(html);
 
-                    getSeasonsByCardUrl(activeUrl, function (seasons) {
+                    getEmbedMediaByCardUrl(activeUrl, function (embedMedia) {
+                        var seasons = (embedMedia && embedMedia.seasons) ? embedMedia.seasons : [];
+                        var embedStreams = (embedMedia && embedMedia.streams) ? embedMedia.streams : [];
+                        var embedSubtitles = (embedMedia && embedMedia.subtitles) ? embedMedia.subtitles : [];
+
                         if (seasons.length) {
                             var isTv = !!parsed.movie.original_name || seasons.length > 1;
                             var last = seasons[seasons.length - 1];
@@ -1224,17 +1402,37 @@
                                     episodes: last.episodes
                                 };
                             } else if (last.episodes.length) {
-                                parsed.movie.kinogo_stream = last.episodes[0].url || '';
-                                parsed.movie.kinogo_subtitles = last.episodes[0].subtitles || [];
+                                parsed.movie.kinogo_stream = pickBestStream([last.episodes[0].url || '']);
+                                parsed.movie.kinogo_subtitles = uniqueSubtitleList(last.episodes[0].subtitles || []);
+                                parsed.movie.url = parsed.movie.kinogo_stream || parsed.movie.url;
                             }
-                        } else if (directStreams.length) {
-                            parsed.movie.kinogo_stream = directStreams[0];
-                            parsed.movie.kinogo_streams = directStreams.map(function (url) {
-                                return {
-                                    quality: 'auto',
-                                    url: url
-                                };
-                            });
+                        } else {
+                            var streams = unique([].concat(embedStreams || [], directStreams || []));
+                            var bestStream = pickBestStream(streams);
+
+                            if (bestStream) {
+                                parsed.movie.kinogo_stream = bestStream;
+                                parsed.movie.url = bestStream;
+                                parsed.movie.kinogo_subtitles = uniqueSubtitleList(embedSubtitles || []);
+                                parsed.movie.kinogo_streams = streams.map(function (url) {
+                                    var isHls = /\.m3u8(?:\?|$)/i.test(url);
+                                    var isMp4 = /\.mp4(?:\?|$)/i.test(url);
+                                    return {
+                                        quality: isHls ? 'hls' : (isMp4 ? 'mp4' : 'auto'),
+                                        url: url
+                                    };
+                                });
+                            }
+                        }
+
+                        if (keepLampaMeta) {
+                            parsed.movie.title = text((activeCard || {}).title || (activeCard || {}).name || parsed.movie.title);
+                            parsed.movie.original_title = text((activeCard || {}).original_title || (activeCard || {}).original_name || parsed.movie.original_title || parsed.movie.title);
+                            parsed.movie.poster = (activeCard || {}).poster || (activeCard || {}).img || parsed.movie.poster;
+                            parsed.movie.img = (activeCard || {}).img || (activeCard || {}).poster || parsed.movie.img;
+                            parsed.movie.background_image = (activeCard || {}).background_image || (activeCard || {}).poster || (activeCard || {}).img || parsed.movie.background_image;
+                            parsed.movie.overview = text((activeCard || {}).overview || parsed.movie.overview || '');
+                            parsed.movie.description = text((activeCard || {}).description || parsed.movie.description || '');
                         }
 
                         oncomplite(result);
@@ -1254,7 +1452,8 @@
                         var retryUrl = foundCard && foundCard.url ? absUrl(foundCard.url).replace(/#.*$/, '') : '';
 
                         if (retryUrl && retryUrl !== activeUrl) {
-                            finalizeByUrl(foundCard, retryUrl, false);
+                            var retryCard = (activeCard && activeCard.keep_lampa_meta) ? buildBridgeCard(activeCard, foundCard) : foundCard;
+                            finalizeByUrl(retryCard || foundCard, retryUrl, false);
                             return;
                         }
 
@@ -1594,6 +1793,35 @@
         next();
     }
 
+    function buildBridgeCard(movie, kinogoCard) {
+        var sourceMovie = movie || {};
+        var found = kinogoCard || {};
+        var isTv = sourceMovie.type === 'tv' || !!sourceMovie.name || !!sourceMovie.first_air_date;
+        var fallbackTitle = text(sourceMovie.title || sourceMovie.name || found.title || found.name || 'KinoGO');
+        var bridge = buildSafeMovieFromCard(sourceMovie, found.url || sourceMovie.url || '');
+
+        bridge.source = SOURCE_KEY;
+        bridge.keep_lampa_meta = true;
+        bridge.url = absUrl(found.url || sourceMovie.url || bridge.url || '');
+        bridge.kinogo_id = extractIdFromUrl(bridge.url) || bridge.kinogo_id || 0;
+        bridge.type = isTv ? 'tv' : 'movie';
+        bridge.title = text(sourceMovie.title || sourceMovie.name || bridge.title || fallbackTitle);
+        bridge.original_title = text(sourceMovie.original_title || sourceMovie.original_name || bridge.original_title || bridge.title);
+        bridge.poster = sourceMovie.poster || sourceMovie.img || bridge.poster;
+        bridge.img = sourceMovie.img || sourceMovie.poster || bridge.img;
+        bridge.background_image = sourceMovie.background_image || sourceMovie.poster || sourceMovie.img || bridge.background_image;
+        bridge.overview = text(sourceMovie.overview || bridge.overview || '');
+        bridge.description = text(sourceMovie.description || bridge.description || '');
+
+        if (isTv) {
+            bridge.name = text(sourceMovie.name || bridge.name || bridge.title);
+            bridge.original_name = text(sourceMovie.original_name || bridge.original_name || bridge.original_title || bridge.name);
+        }
+
+        cardUrlById[bridge.id] = bridge.url;
+        return bridge;
+    }
+
     function openKinogoFromCardMovie(movie) {
         if (!movie) {
             notifyError('KinoGO: фильм не найден в карточке');
@@ -1606,11 +1834,13 @@
                 return;
             }
 
+            var bridgeCard = buildBridgeCard(movie, card);
+
             Lampa.Activity.push({
                 url: '',
-                title: card.title || card.name || 'KinoGO',
+                title: (movie && (movie.title || movie.name)) || card.title || card.name || 'KinoGO',
                 component: 'full',
-                card: card,
+                card: bridgeCard,
                 source: SOURCE_KEY
             });
         });
@@ -1626,7 +1856,7 @@
         if (!hasButton && root.length && root.find('.kinogo-bridge-button').length) hasButton = true;
         if (hasButton) return;
 
-        var btn = $('<div class="full-start__button selector view--kinogo-bridge kinogo-bridge-button">KinoGO</div>');
+        var btn = $('<div class="full-start__button selector kinogo-bridge-button">KinoGO</div>');
 
         function runBridgeOpen(event) {
             if (event && event.preventDefault) event.preventDefault();
@@ -1647,7 +1877,7 @@
         btn.on('hover:enter', runBridgeOpen);
         btn.on('click', runBridgeOpen);
 
-        if (context.hasClass && (context.hasClass('full-start__button') || context.hasClass('view--torrent') || context.hasClass('view--online'))) {
+        if (context.hasClass && (context.hasClass('full-start__button') || context.hasClass('view--torrent') || context.hasClass('view--online') || context.hasClass('view--kinogo-bridge'))) {
             context.after(btn);
             return;
         }
@@ -1808,6 +2038,8 @@
         var req = ensureNetwork();
         if (req) req.clear();
         memoryCache = {};
+        seasonsByUrl = {};
+        embedMediaByUrl = {};
     }
 
     var sourceApi = {
