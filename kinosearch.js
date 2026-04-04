@@ -1063,12 +1063,17 @@
             if (root.find('.kinosearch-bridge-btn').length) return;
 
             var card = active.card || (active.activity && active.activity.card) || {};
-            var jq = (window.Lampa && Lampa.$) ? Lampa.$ : window.$;
-            if (!jq) return;
 
-            var btn = jq('<div class="full-start__button selector kinosearch-bridge-btn">KinoSearch</div>');
+            var place = root.find('.view--torrent');
+            if (!place.length) place = root.find('.full-start-new');
+            if (!place.length) place = root.find('.full-start');
+            if (!place.length) return;
 
-            btn.on('hover:enter click', function() {
+            var btn = document.createElement('div');
+            btn.className = 'full-start__button selector kinosearch-bridge-btn';
+            btn.textContent = 'KinoSearch';
+
+            btn.addEventListener('click', function() {
                 if (!Lampa.Api || !Lampa.Api.sources || !Lampa.Api.sources[SOURCE_ID]) return;
                 Lampa.Api.sources[SOURCE_ID].full(
                     { card: card },
@@ -1079,16 +1084,16 @@
                 );
             });
 
-            var place = root.find('.view--torrent');
-            if (!place.length) place = root.find('.full-start-new');
-            if (!place.length) place = root.find('.full-start');
-            if (!place.length) return;
-
-            var lastBtn = place.find('.full-start__button').last();
-            if (lastBtn.length) lastBtn.after(btn);
-            else place.append(btn);
-
-            console.log('[KinoSearch] button injected');
+            var container = place[0];
+            var buttons = container.querySelectorAll('.full-start__button');
+            if (buttons.length) {
+                var last = buttons[buttons.length - 1];
+                last.parentNode.insertBefore(btn, last.nextSibling);
+            }
+            else {
+                container.appendChild(btn);
+            }
+            console.log('[KinoSearch] button injected via DOM');
         }
         catch (e) {
             console.log('[KinoSearch] error:', e.message);
