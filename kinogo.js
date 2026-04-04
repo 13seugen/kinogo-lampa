@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-cookie-2';
+    var PLUGIN_VERSION = '20260404-cookie-3';
     if (window.__KINOGO_COOKIE_PLUGIN_VERSION__ === PLUGIN_VERSION) return;
     window.__KINOGO_COOKIE_PLUGIN_VERSION__ = PLUGIN_VERSION;
 
@@ -506,6 +506,9 @@
 
             var container = place[0];
             if (!container) return;
+
+            if (container.classList) container.classList.remove('hide');
+            if (container.style && container.style.display === 'none') container.style.display = '';
 
             insertButton(container, active.card || {});
         } catch (e) {
