@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-19';
+    var PLUGIN_VERSION = '20260404-20';
     if (window.kinogo_source_plugin_version === PLUGIN_VERSION) return;
     window.kinogo_source_plugin_version = PLUGIN_VERSION;
 
@@ -9,6 +9,7 @@
     var SOURCE_TITLE = 'KinoGO';
     var BASE_URL = 'https://kinogo.ec';
     var MIRROR_BASES = ['https://kinogo.mu', 'https://kinogo.luxury'];
+    var TEST_PROXY_URL = 'https://cors.eu.org/';
     var CACHE_MINUTES = 45;
     var REQUEST_TIMEOUT = 25000;
 
@@ -159,9 +160,7 @@
 
     function requestHeaders(url) {
         var headers = {
-            'Accept-Language': 'ru-RU,ru;q=0.9',
-            'Referer': BASE_URL + '/',
-            'Origin': BASE_URL
+            'Accept-Language': 'ru-RU,ru;q=0.9'
         };
         var base = detectBase(url);
         if (base) {
@@ -233,7 +232,9 @@
     function proxiedUrl(url) {
         var target = absUrl(url);
         var proxy = text(Lampa.Storage.get('kinogo_proxy', ''));
+        var hardcodedProxy = text(TEST_PROXY_URL || '');
 
+        if (!proxy && /^https?:\/\//i.test(hardcodedProxy)) proxy = hardcodedProxy;
         if (!proxy) return target;
         if (!/^https?:\/\//i.test(proxy)) return target;
 
@@ -294,7 +295,7 @@
             var decoded = '';
             var status = toInt((a || {}).status, 0);
             var message = '';
-            var mirrors = fallbackTargets(target);
+            var mirrors = fallbackTargets(directTarget);
 
             try {
                 decoded = req.errorDecode(a, b);
@@ -322,7 +323,7 @@
                         return;
                     }
 
-                    var mirrorTarget = mirrors[mi++];
+                    var mirrorTarget = proxiedUrl(mirrors[mi++]);
                     var mirrorCacheKey = 'TEXT::' + mirrorTarget + '::' + JSON.stringify(postData || {});
                     var mirrorCached = cacheGet(mirrorCacheKey);
 
