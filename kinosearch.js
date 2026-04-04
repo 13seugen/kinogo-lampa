@@ -1052,7 +1052,8 @@
 
         Lampa.Listener.follow('full', function(e) {
             try {
-                if (!e || e.type !== 'complite' || !e.data || !e.data.movie) return;
+                console.log('[KinoSearch] full event:', e && e.type, e && e.data && Object.keys(e.data));
+                if (!e || (e.type !== 'complite' && e.type !== 'complete' && e.type !== 'ready') || !e.data || !e.data.movie) return;
                 if (typeof $ !== 'function') return;
 
                 var act = e.object && e.object.activity;
