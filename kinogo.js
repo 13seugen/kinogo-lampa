@@ -193,12 +193,20 @@
         return proxy + target;
     }
 
-    function requestText(url, onSuccess, onError, postData, ttlMinutes) {
+    function requestText(url, onSuccess, onError, postData, ttlMinutes, requestOptions) {
         var req = ensureNetwork();
         if (!req) {
             if (onError) onError({ status: 0, responseText: 'Lampa not ready' }, 'not_ready');
             return;
         }
+
+        var options = {};
+        var ttl = CACHE_MINUTES;
+
+        if (typeof ttlMinutes === 'number') ttl = ttlMinutes;
+        else if (ttlMinutes && typeof ttlMinutes === 'object') options = ttlMinutes;
+
+        if (requestOptions && typeof requestOptions === 'object') options = requestOptions;
 
         var directTarget = absUrl(url);
         var target = directTarget;
@@ -213,7 +221,7 @@
 
         function doneSuccess(data, keyForCache) {
             var html = typeof data === 'string' ? data : (data || '') + '';
-            cacheSet(keyForCache || cacheKey, html, ttlMinutes || CACHE_MINUTES);
+            cacheSet(keyForCache || cacheKey, html, ttl);
             onSuccess(html);
         }
 
@@ -257,12 +265,14 @@
                         message = directDecoded ? stripTags(directDecoded).slice(0, 180) : 'Ошибка сети';
                     }
 
-                    notifyError('KinoGO: ' + message);
+                    if (!options.suppressNoty && !(options.suppress404 && directStatus === 404)) {
+                        notifyError('KinoGO: ' + message);
+                    }
                     if (onError) onError({ status: directStatus, responseText: message }, y);
                 }, postData || false, {
                     dataType: 'text',
                     cache: {
-                        life: ttlMinutes || CACHE_MINUTES
+                        life: ttl
                     }
                 });
 
@@ -277,7 +287,9 @@
                 message = decoded ? stripTags(decoded).slice(0, 180) : 'Ошибка сети';
             }
 
-            notifyError('KinoGO: ' + message);
+            if (!options.suppressNoty && !(options.suppress404 && status === 404)) {
+                notifyError('KinoGO: ' + message);
+            }
             if (onError) onError({ status: status, responseText: message }, b);
         }
 
@@ -286,7 +298,7 @@
         }, handleError, postData || false, {
             dataType: 'text',
             cache: {
-                life: ttlMinutes || CACHE_MINUTES
+                life: ttl
             }
         });
     }
@@ -714,10 +726,6 @@
                 var doc = htmlToDoc(html);
                 var results = query ? parseSearchCardsFromDoc(doc) : parseCardsFromDoc(doc);
 
-                if (query && !results.length) {
-                    results = parseCardsFromDoc(doc);
-                }
-
                 if (!results.length) {
                     if (onError) onError();
                     return;
@@ -737,7 +745,10 @@
             }
         }, function () {
             if (onError) onError();
-        }, false, CACHE_MINUTES);
+        }, false, CACHE_MINUTES, {
+            suppress404: true,
+            suppressNoty: !!query
+        });
     }
 
     function extractBalanced(textValue, startIndex, openChar, closeChar) {
@@ -1068,13 +1079,19 @@
                     callback(mapped);
                 }, function () {
                     tryNext();
-                }, false, 20);
+                }, false, 20, {
+                    suppress404: true,
+                    suppressNoty: true
+                });
             }
 
             tryNext();
         }, function () {
             callback([]);
-        }, false, CACHE_MINUTES);
+        }, false, CACHE_MINUTES, {
+            suppress404: true,
+            suppressNoty: true
+        });
     }
 
     function extractDirectStreams(html) {
@@ -1255,7 +1272,9 @@
                 oncomplite({
                     movie: buildSafeMovieFromCard(activeCard || card, activeUrl)
                 });
-            }, false, CACHE_MINUTES);
+            }, false, CACHE_MINUTES, {
+                suppress404: true
+            });
         }
 
         finalizeByUrl(card, pageUrl, true);
@@ -1548,9 +1567,9 @@
                 }
             }
 
-            if (best && bestScore >= 55) onDone(best);
-            else onDone(null);
-        }
+                if (best && bestScore >= 90) onDone(best);
+                else onDone(null);
+            }
 
         function next() {
             if (index >= maxQueries) {
