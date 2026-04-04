@@ -1106,33 +1106,23 @@
 
     function bindCardBridge() {
         if (cardBridgeBound) return;
-        if (!window.Lampa || !Lampa.Listener) return;
         cardBridgeBound = true;
 
-        Lampa.Listener.follow('full', function(e) {
-            try {
-                if (!e || e.type !== 'complite' || !e.data || !e.data.movie) return;
-                var act = e.object && e.object.activity;
-                if (!act || !act.render) return;
-                var root = act.render();
-                var place = root.find('.view--torrent');
-                if (!place.length) place = root.find('.full-start');
-                if (!place.length) place = root;
-                addKinoSearchButton(place, e.data.movie);
-            }
-            catch (e) {}
-        });
-
-        try {
-            var active = Lampa.Activity && Lampa.Activity.active ? Lampa.Activity.active() : null;
-            if (active && active.component === 'full' && active.activity && active.activity.render) {
-                var place = active.activity.render().find('.view--torrent');
-                if (!place.length) place = active.activity.render().find('.full-start');
-                if (!place.length) place = active.activity.render();
-                addKinoSearchButton(place, active.card || {});
-            }
+        if (window.Lampa && Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
+            Lampa.Listener.follow('full', function(e) {
+                try {
+                    if (!e || e.type !== 'complite' || !e.data || !e.data.movie) return;
+                    var act = e.object && e.object.activity;
+                    if (!act || !act.render) return;
+                    var root = act.render();
+                    var place = root.find('.view--torrent');
+                    if (!place.length) place = root.find('.full-start');
+                    if (!place.length) place = root;
+                    addKinoSearchButton(place, e.data.movie);
+                }
+                catch (e) {}
+            });
         }
-        catch (e) {}
 
         if (!cardBridgeTimer) {
             cardBridgeTimer = setInterval(ensureBridgeInActiveFull, 1500);
