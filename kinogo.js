@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-13';
+    var PLUGIN_VERSION = '20260404-14';
     if (window.kinogo_source_plugin_version === PLUGIN_VERSION) return;
     window.kinogo_source_plugin_version = PLUGIN_VERSION;
 
@@ -1822,6 +1822,48 @@
         return bridge;
     }
 
+    function playMovieDirect(movie, kinogoCard, onFail) {
+        var card = kinogoCard || {};
+        var pageUrl = absUrl(card.url || '');
+
+        if (!pageUrl) {
+            if (typeof onFail === 'function') onFail();
+            return;
+        }
+
+        getEmbedMediaByCardUrl(pageUrl, function (media) {
+            var streams = (media && media.streams) ? media.streams : [];
+            var subtitles = (media && media.subtitles) ? media.subtitles : [];
+            var seasons = (media && media.seasons) ? media.seasons : [];
+
+            if ((!streams || !streams.length) && seasons.length && seasons[0].episodes && seasons[0].episodes.length) {
+                var firstEpisode = seasons[0].episodes[0];
+                streams = unique([firstEpisode.url || '', firstEpisode.hls || '', firstEpisode.mp4 || '']);
+                subtitles = uniqueSubtitleList(firstEpisode.subtitles || []);
+            }
+
+            var stream = pickBestStream(streams || []);
+
+            if (!stream || !window.Lampa || !Lampa.Player || typeof Lampa.Player.play !== 'function') {
+                if (typeof onFail === 'function') onFail();
+                return;
+            }
+
+            var playItem = {
+                title: text((movie || {}).title || (movie || {}).name || card.title || card.name || 'KinoGO'),
+                url: stream
+            };
+
+            if (subtitles && subtitles.length) playItem.subtitles = subtitles;
+
+            try {
+                Lampa.Player.play(playItem);
+            } catch (e) {
+                if (typeof onFail === 'function') onFail();
+            }
+        });
+    }
+
     function openKinogoFromCardMovie(movie) {
         if (!movie) {
             notifyError('KinoGO: фильм не найден в карточке');
@@ -1835,6 +1877,14 @@
             }
 
             var bridgeCard = buildBridgeCard(movie, card);
+            var isTv = bridgeCard.type === 'tv' || !!bridgeCard.name || !!bridgeCard.original_name;
+
+            if (!isTv) {
+                playMovieDirect(movie, card, function () {
+                    notifyError('KinoGO: поток не найден');
+                });
+                return;
+            }
 
             Lampa.Activity.push({
                 url: '',
