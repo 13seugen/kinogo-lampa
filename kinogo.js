@@ -199,7 +199,9 @@
             return;
         }
 
+        var directTarget = absUrl(url);
         var target = proxiedUrl(url);
+        var usedProxy = target !== directTarget;
         var cacheKey = 'TEXT::' + target + '::' + JSON.stringify(postData || {});
         var cached = cacheGet(cacheKey);
 
@@ -208,11 +210,13 @@
             return;
         }
 
-        req.silent(target, function (data) {
+        function doneSuccess(data, keyForCache) {
             var html = typeof data === 'string' ? data : (data || '') + '';
-            cacheSet(cacheKey, html, ttlMinutes || CACHE_MINUTES);
+            cacheSet(keyForCache || cacheKey, html, ttlMinutes || CACHE_MINUTES);
             onSuccess(html);
-        }, function (a, b) {
+        }
+
+        function handleError(a, b) {
             var decoded = '';
             var status = toInt((a || {}).status, 0);
             var message = '';
@@ -221,6 +225,47 @@
                 decoded = req.errorDecode(a, b);
             } catch (e) {
                 decoded = '';
+            }
+
+            if (status === 404 && usedProxy) {
+                var fallbackKey = 'TEXT::' + directTarget + '::' + JSON.stringify(postData || {});
+                var fallbackCached = cacheGet(fallbackKey);
+
+                if (fallbackCached !== null) {
+                    onSuccess(fallbackCached);
+                    return;
+                }
+
+                req.silent(directTarget, function (directData) {
+                    doneSuccess(directData, fallbackKey);
+                }, function (x, y) {
+                    var directStatus = toInt((x || {}).status, 0);
+                    var directDecoded = '';
+
+                    try {
+                        directDecoded = req.errorDecode(x, y);
+                    } catch (e) {
+                        directDecoded = '';
+                    }
+
+                    if (directStatus === 403 || /forbidden/i.test(directDecoded || '')) {
+                        message = 'Доступ к KinoGO запрещён (403). Включите HTTPS.';
+                    } else if (directStatus === 404) {
+                        message = 'Страница KinoGO не найдена (404).';
+                    } else {
+                        message = directDecoded ? stripTags(directDecoded).slice(0, 180) : 'Ошибка сети';
+                    }
+
+                    notifyError('KinoGO: ' + message);
+                    if (onError) onError({ status: directStatus, responseText: message }, y);
+                }, postData || false, {
+                    dataType: 'text',
+                    cache: {
+                        life: ttlMinutes || CACHE_MINUTES
+                    }
+                });
+
+                return;
             }
 
             if (status === 403 || /forbidden/i.test(decoded || '')) {
@@ -233,7 +278,11 @@
 
             notifyError('KinoGO: ' + message);
             if (onError) onError({ status: status, responseText: message }, b);
-        }, postData || false, {
+        }
+
+        req.silent(target, function (data) {
+            doneSuccess(data, cacheKey);
+        }, handleError, postData || false, {
             dataType: 'text',
             cache: {
                 life: ttlMinutes || CACHE_MINUTES
