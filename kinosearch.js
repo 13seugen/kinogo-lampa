@@ -1075,25 +1075,33 @@
 
     function ensureBridgeInActiveFull() {
         try {
-            console.log('[KinoSearch] timer tick');
-            if (!Lampa.Activity || !Lampa.Activity.active) { console.log('[KinoSearch] no Activity'); return; }
-            var active = Lampa.Activity.active();
-            console.log('[KinoSearch] component:', active && active.component);
-            if (!active || active.component !== 'full') return;
-            if (!active.activity || !active.activity.render) { console.log('[KinoSearch] no render'); return; }
-            var root = active.activity.render();
-            console.log('[KinoSearch] root:', root && root.length);
-            if (!root || !root.length) return;
-            var place = root.find('.view--torrent');
-            console.log('[KinoSearch] .view--torrent:', place.length);
-            if (!place.length) place = root.find('.full-start');
-            console.log('[KinoSearch] .full-start:', place.length);
-            if (!place.length) place = root.find('.full-start-new');
-            if (!place.length) place = root;
-            var card = active.card || (active.activity && active.activity.card) || {};
-            addKinoSearchButton(place, card);
+            if (document.querySelector('.kinosearch-bridge-btn')) return;
+
+            var btn = document.createElement('div');
+            btn.className = 'kinosearch-bridge-btn';
+            btn.innerHTML = 'KinoSearch';
+            btn.style.cssText = 'position:fixed;bottom:80px;right:20px;z-index:99999;background:rgba(0,120,255,0.9);color:white;padding:12px 20px;border-radius:8px;font-size:20px;cursor:pointer;';
+            document.body.appendChild(btn);
+            console.log('[KinoSearch] floating button added');
+
+            btn.addEventListener('click', function() {
+                btn.remove();
+                if (!Lampa.Activity || !Lampa.Activity.active) return;
+                var active = Lampa.Activity.active();
+                var card = active && (active.card || (active.activity && active.activity.card)) || {};
+                if (!Lampa.Api || !Lampa.Api.sources || !Lampa.Api.sources[SOURCE_ID]) return;
+                Lampa.Api.sources[SOURCE_ID].full(
+                    { card: card },
+                    function() {},
+                    function(err) {
+                        if (Lampa.Noty) Lampa.Noty.show('KinoSearch: ' + ((err && err.text) || 'Nicht gefunden'));
+                    }
+                );
+            });
         }
-        catch (e) { console.log('[KinoSearch] timer error:', e.message); }
+        catch (e) {
+            console.log('[KinoSearch] error:', e.message);
+        }
     }
 
     function bindCardBridge() {
