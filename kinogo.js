@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-23';
+    var PLUGIN_VERSION = '20260404-24';
     if (window.kinogo_source_plugin_version === PLUGIN_VERSION) return;
     window.kinogo_source_plugin_version = PLUGIN_VERSION;
 
@@ -2356,67 +2356,6 @@
         } catch (e) {}
     }
 
-    function registerProxySettings() {
-        try {
-            if (!window.Lampa || !Lampa.Params || !Lampa.SettingsApi) return;
-            if (window.__kinogo_proxy_settings_registered) return;
-
-            if (typeof Lampa.SettingsApi.addComponent === 'function') {
-                Lampa.SettingsApi.addComponent({
-                    component: 'kinogo_proxy',
-                    icon: '<svg height="36" viewBox="0 0 42 46" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 2C15.201 2 10.5 6.701 10.5 12.5V20H7a5 5 0 0 0-5 5v14a5 5 0 0 0 5 5h28a5 5 0 0 0 5-5V25a5 5 0 0 0-5-5h-3.5v-7.5C31.5 6.701 26.799 2 21 2Zm-6.5 10.5a6.5 6.5 0 1 1 13 0V20h-13v-7.5Z" stroke="white" stroke-width="3"/></svg>',
-                    name: 'KinoGO'
-                });
-            }
-
-            if (typeof Lampa.SettingsApi.addParam === 'function') {
-                Lampa.SettingsApi.addParam({
-                    component: 'kinogo_proxy',
-                    param: {
-                        name: 'kinogo_title_proxy',
-                        type: 'title'
-                    },
-                    field: {
-                        name: 'Прокси'
-                    }
-                });
-
-                Lampa.SettingsApi.addParam({
-                    component: 'kinogo_proxy',
-                    param: {
-                        name: 'kinogo_proxy',
-                        type: 'input',
-                        default: '',
-                        placeholder: 'https://cors.eu.org/{url}'
-                    },
-                    field: {
-                        name: 'CORS proxy URL',
-                        description: 'Пример: https://cors.eu.org/{url} или https://api.codetabs.com/v1/proxy?quest={url}'
-                    }
-                });
-
-                Lampa.SettingsApi.addParam({
-                    component: 'kinogo_proxy',
-                    param: {
-                        name: 'kinogo_reset_btn',
-                        type: 'button'
-                    },
-                    field: {
-                        name: 'Сбросить прокси'
-                    },
-                    onChange: function () {
-                        Lampa.Storage.set('kinogo_proxy', '');
-                        Lampa.Noty.show('KinoGO: прокси очищен');
-                    }
-                });
-            }
-
-            window.__kinogo_proxy_settings_registered = true;
-        } catch (e) {
-            log('proxy settings error', e.message);
-        }
-    }
-
     function register() {
         if (!Lampa || !Lampa.Api || !Lampa.Api.sources) return;
 
@@ -2438,7 +2377,6 @@
         try {
             ensureMainSourceNotKinogo();
             hideKinogoInSourceSettings();
-            registerProxySettings();
             register();
             bindCardBridge();
         } catch (e) {
