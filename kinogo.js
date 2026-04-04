@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-cookie-1';
+    var PLUGIN_VERSION = '20260404-cookie-2';
     if (window.__KINOGO_COOKIE_PLUGIN_VERSION__ === PLUGIN_VERSION) return;
     window.__KINOGO_COOKIE_PLUGIN_VERSION__ = PLUGIN_VERSION;
 
