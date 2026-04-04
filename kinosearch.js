@@ -1109,18 +1109,25 @@
         }
     }
 
-    if (window.appready) {
+    var _ksInited = false;
+    function _ksStart() {
+        if (_ksInited) return;
+        _ksInited = true;
         startPlugin();
     }
-    else if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
-        Lampa.Listener.follow('app', function(event) {
-            if (event && event.type === 'ready') startPlugin();
-        });
-        Lampa.Listener.follow('appready', function() {
-            startPlugin();
-        });
+
+    if (window.appready) {
+        _ksStart();
     }
     else {
-        startPlugin();
+        if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
+            Lampa.Listener.follow('app', function(e) {
+                if (e && e.type === 'ready') _ksStart();
+            });
+            Lampa.Listener.follow('appready', _ksStart);
+        }
+        setTimeout(function() {
+            _ksStart();
+        }, 3000);
     }
 })();
