@@ -112,6 +112,7 @@
 
         if (!value) return '';
         if (value.indexOf('//') === 0) return 'https:' + value;
+        if (/^http:\/\//i.test(value)) value = 'https://' + value.slice(7);
         if (/^https?:\/\//i.test(value)) return value;
         if (value.charAt(0) !== '/') value = '/' + value;
 
@@ -213,6 +214,8 @@
             onSuccess(html);
         }, function (a, b) {
             var decoded = '';
+            var status = toInt((a || {}).status, 0);
+            var message = '';
 
             try {
                 decoded = req.errorDecode(a, b);
@@ -220,8 +223,16 @@
                 decoded = '';
             }
 
-            notifyError(decoded ? ('KinoGO: ' + decoded) : 'KinoGO: ошибка сети');
-            if (onError) onError(a, b);
+            if (status === 403 || /forbidden/i.test(decoded || '')) {
+                message = 'Доступ к KinoGO запрещён (403). Включите HTTPS.';
+            } else if (status === 404) {
+                message = 'Страница KinoGO не найдена (404).';
+            } else {
+                message = decoded ? stripTags(decoded).slice(0, 180) : 'Ошибка сети';
+            }
+
+            notifyError('KinoGO: ' + message);
+            if (onError) onError({ status: status, responseText: message }, b);
         }, postData || false, {
             dataType: 'text',
             cache: {
@@ -1635,23 +1646,14 @@
         clear: clear
     };
 
-    function refreshSourceSettings() {
-        if (!Lampa.Params || !Lampa.Params.select || !Lampa.Api || !Lampa.Api.sources) return;
-
-        var sourceOptions = {};
-        var sources = Lampa.Api.sources;
-
-        for (var key in sources) {
-            if (!Object.prototype.hasOwnProperty.call(sources, key)) continue;
-            if (key === 'tmdb') sourceOptions[key] = 'TMDB';
-            else if (key === 'cub') sourceOptions[key] = 'CUB';
-            else if (key === SOURCE_KEY) sourceOptions[key] = SOURCE_TITLE;
-            else sourceOptions[key] = key.toUpperCase();
-        }
-
-        if (!sourceOptions[SOURCE_KEY]) sourceOptions[SOURCE_KEY] = SOURCE_TITLE;
-
-        Lampa.Params.select('source', sourceOptions, Lampa.Storage.get('source', 'tmdb'));
+    function ensureMainSourceNotKinogo() {
+        try {
+            if (!window.Lampa || !Lampa.Storage || typeof Lampa.Storage.get !== 'function') return;
+            var selected = Lampa.Storage.get('source', 'tmdb');
+            if (selected === SOURCE_KEY && typeof Lampa.Storage.set === 'function') {
+                Lampa.Storage.set('source', 'tmdb');
+            }
+        } catch (e) {}
     }
 
     function register() {
@@ -1659,12 +1661,12 @@
         if (Lampa.Api.sources[SOURCE_KEY]) return;
 
         Lampa.Api.sources[SOURCE_KEY] = sourceApi;
-        refreshSourceSettings();
         log('source registered');
     }
 
     function start() {
         try {
+            ensureMainSourceNotKinogo();
             register();
             bindCardBridge();
         } catch (e) {
