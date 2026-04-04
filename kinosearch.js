@@ -1050,10 +1050,12 @@
     }
 
     function addKinoSearchButton(place, card) {
-        if (!place || !place.length || !window.$) return;
+        if (!place || !place.length) return;
+        var _$ = window.$ || (window.jQuery) || null;
+        if (!_$) return;
         if (place.find('.kinosearch-bridge-btn').length) return;
 
-        var btn = $('<div class="full-start__button selector kinosearch-bridge-btn">KinoSearch</div>');
+        var btn = _$('<div class="full-start__button selector kinosearch-bridge-btn">KinoSearch</div>');
 
         btn.on('hover:enter click', function() {
             if (!Lampa.Api || !Lampa.Api.sources || !Lampa.Api.sources[SOURCE_ID]) return;
