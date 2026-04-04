@@ -1051,30 +1051,22 @@
 
     function addKinoSearchButton(place, card) {
         try {
-            if (!place || !place.length) return;
+            if (!place || !place.length) { console.log('[KinoSearch] no place'); return; }
 
             var container = place[0];
-            if (!container) return;
-            if (container.querySelector('.kinosearch-bridge-btn')) return;
+            if (!container) { console.log('[KinoSearch] no container'); return; }
+
+            var existing = container.querySelector('.kinosearch-bridge-btn');
+            console.log('[KinoSearch] existing btn:', !!existing, 'container tag:', container.tagName, 'container class:', container.className);
+            if (existing) return;
 
             var btn = document.createElement('div');
             btn.className = 'full-start__button selector kinosearch-bridge-btn';
             btn.innerHTML = 'KinoSearch';
-            btn.style.cssText = 'cursor:pointer;margin-top:4px;';
+            btn.style.cssText = 'cursor:pointer;margin-top:4px;display:block;color:white;padding:8px;';
 
             container.appendChild(btn);
-            console.log('[KinoSearch] button added to DOM');
-
-            btn.addEventListener('click', function() {
-                if (!Lampa.Api || !Lampa.Api.sources || !Lampa.Api.sources[SOURCE_ID]) return;
-                Lampa.Api.sources[SOURCE_ID].full(
-                    { card: card || {} },
-                    function() {},
-                    function(err) {
-                        if (Lampa.Noty) Lampa.Noty.show('KinoSearch: ' + ((err && err.text) || 'Nicht gefunden'));
-                    }
-                );
-            });
+            console.log('[KinoSearch] button added, container children:', container.children.length);
         }
         catch (e) {
             console.log('[KinoSearch] addButton error:', e.message);
