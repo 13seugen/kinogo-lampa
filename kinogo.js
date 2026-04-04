@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-27';
+    var PLUGIN_VERSION = '20260404-27-online-1';
     if (window.kinogo_source_plugin_version === PLUGIN_VERSION) return;
     window.kinogo_source_plugin_version = PLUGIN_VERSION;
 
@@ -2326,6 +2326,8 @@
     }
 
     var sourceApi = {
+        type: 'online',
+        title: 'KinoGO',
         main: main,
         category: category,
         list: list,
