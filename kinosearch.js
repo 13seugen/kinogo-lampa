@@ -1109,11 +1109,15 @@
         }
     }
 
-    if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
+    if (window.appready) {
+        startPlugin();
+    }
+    else if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
         Lampa.Listener.follow('app', function(event) {
-            if (event && event.type === 'ready') {
-                startPlugin();
-            }
+            if (event && event.type === 'ready') startPlugin();
+        });
+        Lampa.Listener.follow('appready', function() {
+            startPlugin();
         });
     }
     else {
