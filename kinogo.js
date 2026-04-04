@@ -20,6 +20,8 @@
     var cardUrlById = {};
     var seasonsByUrl = {};
     var lastNotyAt = 0;
+    var bridgeOpenAt = 0;
+    var bridgeOpenBusy = false;
     var menuCache = {
         expires: 0,
         items: []
@@ -1624,14 +1626,26 @@
         if (!hasButton && root.length && root.find('.kinogo-bridge-button').length) hasButton = true;
         if (hasButton) return;
 
-        var btn = $('<div class="full-start__button selector view--online kinogo-bridge-button">KinoGO</div>');
+        var btn = $('<div class="full-start__button selector view--kinogo-bridge kinogo-bridge-button">KinoGO</div>');
 
-        btn.on('hover:enter', function () {
+        function runBridgeOpen(event) {
+            if (event && event.preventDefault) event.preventDefault();
+            if (event && event.stopPropagation) event.stopPropagation();
+
+            var ts = now();
+            if (bridgeOpenBusy || (ts - bridgeOpenAt < 1200)) return;
+            bridgeOpenAt = ts;
+            bridgeOpenBusy = true;
+
             openKinogoFromCardMovie(movie || resolveActiveMovieCard() || {});
-        });
-        btn.on('click', function () {
-            openKinogoFromCardMovie(movie || resolveActiveMovieCard() || {});
-        });
+
+            setTimeout(function () {
+                bridgeOpenBusy = false;
+            }, 1200);
+        }
+
+        btn.on('hover:enter', runBridgeOpen);
+        btn.on('click', runBridgeOpen);
 
         if (context.hasClass && (context.hasClass('full-start__button') || context.hasClass('view--torrent') || context.hasClass('view--online'))) {
             context.after(btn);
