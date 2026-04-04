@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-14';
+    var PLUGIN_VERSION = '20260404-15';
     if (window.kinogo_source_plugin_version === PLUGIN_VERSION) return;
     window.kinogo_source_plugin_version = PLUGIN_VERSION;
 
@@ -675,6 +675,16 @@
         return url;
     }
 
+    function buildSearchUrlFallback(query, page) {
+        var encoded = encodeURIComponent(query || '');
+        var url = BASE_URL + '/xfsearch/' + encoded + '/';
+        var p = Math.max(1, toInt(page, 1));
+
+        if (p > 1) url = appendPage(url, p);
+
+        return url;
+    }
+
     function normalizeSitePath(url) {
         var normalized = absUrl(url);
         var match = normalized.match(/\/xfsearch\/([^/?#]+)\//i);
@@ -728,6 +738,41 @@
             try {
                 var doc = htmlToDoc(html);
                 var results = query ? parseSearchCardsFromDoc(doc) : parseCardsFromDoc(doc);
+
+                if (query && !results.length) {
+                    var fallbackUrl = buildSearchUrlFallback(query, page);
+
+                    requestText(fallbackUrl, function (fallbackHtml) {
+                        try {
+                            var fallbackDoc = htmlToDoc(fallbackHtml);
+                            var fallbackResults = parseCardsFromDoc(fallbackDoc);
+
+                            if (!fallbackResults.length) {
+                                if (onError) onError();
+                                return;
+                            }
+
+                            onSuccess({
+                                results: fallbackResults,
+                                page: page,
+                                total_pages: parsePagination(fallbackDoc, page),
+                                source: SOURCE_KEY,
+                                url: params.url || '',
+                                query: query
+                            });
+                        } catch (e2) {
+                            log('fallback parse cards error', e2.message);
+                            if (onError) onError();
+                        }
+                    }, function () {
+                        if (onError) onError();
+                    }, false, CACHE_MINUTES, {
+                        suppress404: true,
+                        suppressNoty: true
+                    });
+
+                    return;
+                }
 
                 if (!results.length) {
                     if (onError) onError();
@@ -1768,7 +1813,8 @@
                 }
             }
 
-                if (best && bestScore >= 90) onDone(best);
+                if (best && bestScore >= 70) onDone(best);
+                else if (candidates.length) onDone(candidates[0]);
                 else onDone(null);
             }
 
