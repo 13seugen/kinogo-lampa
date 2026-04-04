@@ -200,8 +200,8 @@
         }
 
         var directTarget = absUrl(url);
-        var target = proxiedUrl(url);
-        var usedProxy = target !== directTarget;
+        var target = directTarget;
+        var usedProxy = false;
         var cacheKey = 'TEXT::' + target + '::' + JSON.stringify(postData || {});
         var cached = cacheGet(cacheKey);
 
