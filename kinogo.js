@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-24';
+    var PLUGIN_VERSION = '20260404-25';
     if (window.kinogo_source_plugin_version === PLUGIN_VERSION) return;
     window.kinogo_source_plugin_version = PLUGIN_VERSION;
 
@@ -2375,6 +2375,7 @@
 
     function start() {
         try {
+            if (window.Lampa && Lampa.Storage) Lampa.Storage.set('kinogo_proxy', '');
             ensureMainSourceNotKinogo();
             hideKinogoInSourceSettings();
             register();
