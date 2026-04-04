@@ -1078,19 +1078,25 @@
 
     function ensureBridgeInActiveFull() {
         try {
-            if (!Lampa.Activity || !Lampa.Activity.active) return;
+            console.log('[KinoSearch] timer tick');
+            if (!Lampa.Activity || !Lampa.Activity.active) { console.log('[KinoSearch] no Activity'); return; }
             var active = Lampa.Activity.active();
-            if (!active || active.component !== 'full' || !active.activity || !active.activity.render) return;
+            console.log('[KinoSearch] component:', active && active.component);
+            if (!active || active.component !== 'full') return;
+            if (!active.activity || !active.activity.render) { console.log('[KinoSearch] no render'); return; }
             var root = active.activity.render();
+            console.log('[KinoSearch] root:', root && root.length);
             if (!root || !root.length) return;
             var place = root.find('.view--torrent');
+            console.log('[KinoSearch] .view--torrent:', place.length);
             if (!place.length) place = root.find('.full-start');
+            console.log('[KinoSearch] .full-start:', place.length);
             if (!place.length) place = root.find('.full-start-new');
             if (!place.length) place = root;
             var card = active.card || (active.activity && active.activity.card) || {};
             addKinoSearchButton(place, card);
         }
-        catch (e) {}
+        catch (e) { console.log('[KinoSearch] timer error:', e.message); }
     }
 
     function bindCardBridge() {
