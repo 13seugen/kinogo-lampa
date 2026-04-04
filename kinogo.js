@@ -494,12 +494,31 @@
             push(parseCardFromShortstory(nodes[i]));
         }
 
-        if (cards.length < 5) {
+        if (cards.length === 0) {
             var anchors = doc.querySelectorAll('a[href*=".html"], a[href*="/serial"], a[href*="/movie"]');
 
             for (i = 0; i < anchors.length; i++) {
                 push(parseCardFromAnchor(anchors[i]));
             }
+        }
+
+        return cards;
+    }
+
+    function parseSearchCardsFromDoc(doc) {
+        var cards = [];
+        var uniq = {};
+        var nodes = doc.querySelectorAll('#dle-content .shortstory, .shortstory');
+
+        function push(card) {
+            if (!card || !card.url) return;
+            if (uniq[card.url]) return;
+            uniq[card.url] = true;
+            cards.push(card);
+        }
+
+        for (var i = 0; i < nodes.length; i++) {
+            push(parseCardFromShortstory(nodes[i]));
         }
 
         return cards;
@@ -643,7 +662,11 @@
         requestText(url, function (html) {
             try {
                 var doc = htmlToDoc(html);
-                var results = parseCardsFromDoc(doc);
+                var results = query ? parseSearchCardsFromDoc(doc) : parseCardsFromDoc(doc);
+
+                if (query && !results.length) {
+                    results = parseCardsFromDoc(doc);
+                }
 
                 if (!results.length) {
                     if (onError) onError();
@@ -1435,7 +1458,25 @@
     }
 
     function openKinogoFromCardMovie(movie) {
-        openKinogoSearchFromMovie(movie || {});
+        if (!movie) {
+            notifyError('KinoGO: фильм не найден в карточке');
+            return;
+        }
+
+        findKinogoCardByMovie(movie, function (card) {
+            if (!card) {
+                openKinogoSearchFromMovie(movie);
+                return;
+            }
+
+            Lampa.Activity.push({
+                url: '',
+                title: card.title || card.name || 'KinoGO',
+                component: 'full',
+                card: card,
+                source: SOURCE_KEY
+            });
+        });
     }
 
     function addCardBridgeButton(render, movie) {
