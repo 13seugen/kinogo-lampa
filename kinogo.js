@@ -1,13 +1,13 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-12';
+    var PLUGIN_VERSION = '20260404-13';
     if (window.kinogo_source_plugin_version === PLUGIN_VERSION) return;
     window.kinogo_source_plugin_version = PLUGIN_VERSION;
 
     var SOURCE_KEY = 'kinogo';
     var SOURCE_TITLE = 'KinoGO';
-    var BASE_URL = 'https://kinogo.li';
+    var BASE_URL = 'https://kinogo.ec';
     var CACHE_MINUTES = 45;
     var REQUEST_TIMEOUT = 25000;
 
