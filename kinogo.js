@@ -1,8 +1,9 @@
 (function () {
     'use strict';
 
-    if (window.kinogo_source_plugin_ready) return;
-    window.kinogo_source_plugin_ready = true;
+    var PLUGIN_VERSION = '20260404-8';
+    if (window.kinogo_source_plugin_version === PLUGIN_VERSION) return;
+    window.kinogo_source_plugin_version = PLUGIN_VERSION;
 
     var SOURCE_KEY = 'kinogo';
     var SOURCE_TITLE = 'KinoGO';
@@ -1829,7 +1830,6 @@
 
     function register() {
         if (!Lampa || !Lampa.Api || !Lampa.Api.sources) return;
-        if (Lampa.Api.sources[SOURCE_KEY]) return;
 
         try {
             Object.defineProperty(Lampa.Api.sources, SOURCE_KEY, {
