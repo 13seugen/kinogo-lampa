@@ -1047,10 +1047,60 @@
         attachDiscoverySource();
     }
 
+    function bindCardBridge() {
+        if (!Lampa.Listener || typeof Lampa.Listener.follow !== 'function') return;
+
+        Lampa.Listener.follow('full', function(e) {
+            try {
+                if (!e || e.type !== 'complite' || !e.data || !e.data.movie) return;
+                if (typeof $ !== 'function') return;
+
+                var act = e.object && e.object.activity;
+                if (!act || typeof act.render !== 'function') return;
+
+                var root = act.render();
+                if (!root || typeof root.find !== 'function') return;
+
+                var place = root.find('.view--torrent');
+                if (!place.length) place = root.find('.full-start');
+                if (!place.length) place = root;
+
+                var card = e.data.movie;
+                var btn = $('<div class="full-start__button selector" data-kinosearch="1">'
+                    + '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+                    + '<circle cx="12" cy="12" r="10" stroke="white" stroke-width="2"/>'
+                    + '<polygon points="10,8 16,12 10,16" fill="white"/>'
+                    + '</svg>'
+                    + '<span>KinoSearch</span>'
+                    + '</div>');
+
+                place.find('[data-kinosearch]').remove();
+                place.append(btn);
+
+                btn.on('hover:enter click', function() {
+                    if (!Lampa.Api || !Lampa.Api.sources || !Lampa.Api.sources[SOURCE_ID]) return;
+                    Lampa.Api.sources[SOURCE_ID].full(
+                        { card: card },
+                        function() {},
+                        function(err) {
+                            if (Lampa.Noty && typeof Lampa.Noty.show === 'function') {
+                                Lampa.Noty.show('KinoSearch: ' + ((err && err.text) || 'Nicht gefunden'));
+                            }
+                        }
+                    );
+                });
+            }
+            catch (err) {
+                logError('card bridge error', err);
+            }
+        });
+    }
+
     function startPlugin() {
         try {
             registerSettings();
             registerSource();
+            bindCardBridge();
             log('init version ' + PLUGIN_VERSION);
         }
         catch (e) {
