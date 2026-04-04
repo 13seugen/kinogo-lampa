@@ -987,6 +987,44 @@
         };
     }
 
+    function buildSafeMovieFromCard(card, pageUrl) {
+        var base = card || {};
+        var title = text(base.title || base.name || 'KinoGO');
+        var genres = Array.isArray(base.genres) ? base.genres : [];
+        var countries = Array.isArray(base.production_countries) ? base.production_countries : [];
+        var safe = {
+            id: base.id || hashValue(pageUrl || title),
+            kinogo_id: base.kinogo_id || extractIdFromUrl(pageUrl || base.url || ''),
+            source: SOURCE_KEY,
+            url: absUrl(base.url || pageUrl || ''),
+            title: title,
+            original_title: text(base.original_title || title),
+            overview: text(base.overview || base.description || ''),
+            description: text(base.description || base.overview || ''),
+            vote_average: toFloat(base.vote_average, 0),
+            kp_rating: toFloat(base.kp_rating, 0),
+            imdb_rating: toFloat(base.imdb_rating, 0),
+            genres: genres,
+            genre_ids: Array.isArray(base.genre_ids) ? base.genre_ids : [],
+            production_companies: Array.isArray(base.production_companies) ? base.production_companies : [],
+            production_countries: countries,
+            img: base.img || base.poster || './img/img_broken.svg',
+            poster: base.poster || base.img || './img/img_broken.svg',
+            background_image: base.background_image || base.poster || base.img || './img/img_broken.svg',
+            type: base.type === 'tv' ? 'tv' : 'movie'
+        };
+
+        if (base.year) safe.year = toInt(base.year, 0);
+        if (base.release_date) safe.release_date = base.release_date;
+        if (base.first_air_date) safe.first_air_date = base.first_air_date;
+        if (safe.type === 'tv') {
+            safe.name = text(base.name || title);
+            safe.original_name = text(base.original_name || safe.original_title || title);
+        }
+
+        return safe;
+    }
+
     function getSeasonsByCardUrl(cardUrl, callback) {
         var url = absUrl(cardUrl || '');
         if (!url) {
@@ -1124,8 +1162,9 @@
 
         function finalizeByUrl(activeCard, activeUrl, canRetryBySearch) {
             if (!activeUrl) {
-                notifyError('KinoGO: не найден URL карточки');
-                if (onerror) onerror();
+                oncomplite({
+                    movie: buildSafeMovieFromCard(activeCard || card, pageUrl || (activeCard || {}).url || '')
+                });
                 return;
             }
 
@@ -1183,7 +1222,9 @@
                 } catch (e) {
                     log('full parse error', e.message);
                     notifyError('KinoGO: ошибка парсинга карточки');
-                    if (onerror) onerror();
+                    oncomplite({
+                        movie: buildSafeMovieFromCard(activeCard || card, activeUrl)
+                    });
                 }
             }, function (err) {
                 var status = toInt((err || {}).status, 0);
@@ -1204,10 +1245,15 @@
 
                 if (status === 404) {
                     openKinogoSearchFromMovie(activeCard || card || {});
+                    oncomplite({
+                        movie: buildSafeMovieFromCard(activeCard || card, activeUrl)
+                    });
                     return;
                 }
 
-                if (onerror) onerror();
+                oncomplite({
+                    movie: buildSafeMovieFromCard(activeCard || card, activeUrl)
+                });
             }, false, CACHE_MINUTES);
         }
 
