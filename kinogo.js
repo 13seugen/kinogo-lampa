@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-28';
+    var PLUGIN_VERSION = '20260404-29';
     if (window.kinogo_source_plugin_version === PLUGIN_VERSION) return;
     window.kinogo_source_plugin_version = PLUGIN_VERSION;
 
@@ -9,7 +9,7 @@
     var SOURCE_TITLE = 'KinoGO';
     var BASE_URL = 'https://kinogo.ec';
     var MIRROR_BASES = ['https://kinogo.mu', 'https://kinogo.luxury'];
-    var TEST_PROXY_URL = '';
+    var TEST_PROXY_URL = 'https://corsproxy.io/?';
     var CACHE_MINUTES = 45;
     var REQUEST_TIMEOUT = 25000;
 
