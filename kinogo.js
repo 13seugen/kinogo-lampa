@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var PLUGIN_VERSION = '20260404-21';
+    var PLUGIN_VERSION = '20260404-22';
     if (window.kinogo_source_plugin_version === PLUGIN_VERSION) return;
     window.kinogo_source_plugin_version = PLUGIN_VERSION;
 
@@ -2360,8 +2360,6 @@
         try {
             if (!window.Lampa || !Lampa.Params || !Lampa.SettingsApi) return;
             if (window.__kinogo_proxy_settings_registered) return;
-
-            Lampa.Params.select('kinogo_proxy', '', '');
 
             if (typeof Lampa.SettingsApi.addComponent === 'function') {
                 Lampa.SettingsApi.addComponent({
