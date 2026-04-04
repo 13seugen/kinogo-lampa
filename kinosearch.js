@@ -1048,35 +1048,35 @@
     }
 
     function bindCardBridge() {
-        if (!Lampa.Listener || typeof Lampa.Listener.follow !== 'function') return;
-
-        Lampa.Listener.follow('full', function(e) {
+        setInterval(function() {
             try {
-                console.log('[KinoSearch] full event:', e && e.type, e && e.data && Object.keys(e.data));
-                if (!e || (e.type !== 'complite' && e.type !== 'complete' && e.type !== 'ready') || !e.data || !e.data.movie) return;
-                if (typeof $ !== 'function') return;
+                if (!window.Lampa || !Lampa.Activity || !Lampa.Activity.active) return;
+                var active = Lampa.Activity.active();
+                if (!active || active.component !== 'full') return;
+                if (!active.activity || typeof active.activity.render !== 'function') return;
 
-                var act = e.object && e.object.activity;
-                if (!act || typeof act.render !== 'function') return;
-
-                var root = act.render();
+                var root = active.activity.render();
                 if (!root || typeof root.find !== 'function') return;
 
-                var place = root.find('.view--torrent');
-                if (!place.length) place = root.find('.full-start');
-                if (!place.length) place = root;
+                if (root.find('[data-kinosearch]').length) return;
 
-                var card = e.data.movie;
-                var btn = $('<div class="full-start__button selector" data-kinosearch="1">'
-                    + '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+                var place = root.find('.view--torrent');
+                if (!place.length) place = root.find('.full-start-new');
+                if (!place.length) place = root.find('.full-start');
+                if (!place.length) return;
+
+                var card = active.card || (active.activity && active.activity.card) || {};
+
+                var btn = $('<div class="full-start__button selector" style="margin-top:0.5em" data-kinosearch="1">'
+                    + '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle;margin-right:6px">'
                     + '<circle cx="12" cy="12" r="10" stroke="white" stroke-width="2"/>'
                     + '<polygon points="10,8 16,12 10,16" fill="white"/>'
                     + '</svg>'
                     + '<span>KinoSearch</span>'
                     + '</div>');
 
-                place.find('[data-kinosearch]').remove();
                 place.append(btn);
+                console.log('[KinoSearch] button injected');
 
                 btn.on('hover:enter click', function() {
                     if (!Lampa.Api || !Lampa.Api.sources || !Lampa.Api.sources[SOURCE_ID]) return;
@@ -1084,17 +1084,15 @@
                         { card: card },
                         function() {},
                         function(err) {
-                            if (Lampa.Noty && typeof Lampa.Noty.show === 'function') {
-                                Lampa.Noty.show('KinoSearch: ' + ((err && err.text) || 'Nicht gefunden'));
-                            }
+                            if (Lampa.Noty) Lampa.Noty.show('KinoSearch: ' + ((err && err.text) || 'Nicht gefunden'));
                         }
                     );
                 });
             }
-            catch (err) {
-                logError('card bridge error', err);
+            catch (e) {
+                console.log('[KinoSearch] bridge error:', e.message);
             }
-        });
+        }, 1500);
     }
 
     function startPlugin() {
