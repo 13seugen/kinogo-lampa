@@ -1435,25 +1435,7 @@
     }
 
     function openKinogoFromCardMovie(movie) {
-        if (!movie) {
-            notifyError('KinoGO: фильм не найден в карточке');
-            return;
-        }
-
-        findKinogoCardByMovie(movie, function (card) {
-            if (!card) {
-                openKinogoSearchFromMovie(movie);
-                return;
-            }
-
-            Lampa.Activity.push({
-                url: '',
-                title: card.title || card.name || 'KinoGO',
-                component: 'full',
-                card: card,
-                source: SOURCE_KEY
-            });
-        });
+        openKinogoSearchFromMovie(movie || {});
     }
 
     function addCardBridgeButton(render, movie) {
